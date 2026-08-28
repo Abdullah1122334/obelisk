@@ -69,6 +69,11 @@ Options:
   -w, --work DIR    scratch build directory           (default: work)
   -k, --keep-work   do not delete the work directory on success
   -n, --dry-run     assemble and validate the profile, then stop before mkarchiso
+  -s, --serial-console
+                    add console=ttyS0,115200 to the kernel command line so the boot is
+                    observable over a serial port. Required by scripts/test-qemu.sh to
+                    see anything other than the final marker. Off by default: a released
+                    medium should not carry it.
   -h, --help        this message
 
 Reads config.env if present. See config.env.example for every variable.
@@ -79,6 +84,7 @@ OUT_DIR="out"
 WORK_DIR="work"
 KEEP_WORK=0
 DRY_RUN=0
+SERIAL_CONSOLE="${OBELISK_SERIAL_CONSOLE:-0}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -86,6 +92,7 @@ while [[ $# -gt 0 ]]; do
         -w|--work)      WORK_DIR="${2:?--work requires a directory}"; shift 2 ;;
         -k|--keep-work) KEEP_WORK=1; shift ;;
         -n|--dry-run)   DRY_RUN=1; shift ;;
+        -s|--serial-console) SERIAL_CONSOLE=1; shift ;;
         -h|--help)      usage; exit 0 ;;
         *)              usage >&2; die "unknown option: $1" ;;
     esac
@@ -491,6 +498,43 @@ rsync -a --exclude='.gitkeep' -- "${REPO_ROOT}/iso/" "${PROFILE_DIR}/"
     find "${REPO_ROOT}/iso" -type f -printf '%P\n' | sort
 } >> "$MANIFEST"
 info "profile manifest written to ${MANIFEST}"
+
+# ---------------------------------------------------------------------------
+# Optional: make the boot observable over a serial port
+# ---------------------------------------------------------------------------
+# Without this the kernel logs only to the VGA console, so a headless QEMU run produces
+# an EMPTY serial log until /root/.bash_profile writes the completion marker. That is
+# exactly what happened in CI run #6: the boot test timed out and there was no way to
+# tell a slow boot from a hung one, because there was nothing to look at.
+#
+# The kernel command line lives on the lines carrying archisobasedir=, in both the
+# syslinux and GRUB configurations, so one targeted edit covers every entry and every
+# firmware. console=tty0 is listed last so the VGA console remains /dev/console and the
+# medium still behaves normally for a human sitting in front of it.
+#
+# Off by default. A released medium should not advertise a serial console it may not
+# have; this exists so the automated boot test can see what it is testing.
+if [[ "$SERIAL_CONSOLE" == 1 ]]; then
+    injected=0
+    while IFS= read -r -d '' cfg; do
+        if grep -q 'archisobasedir=' "$cfg"; then
+            sed -i '/archisobasedir=/ s/$/ console=ttyS0,115200 console=tty0/' -- "$cfg"
+            injected=$((injected + 1))
+        fi
+    done < <(find "$PROFILE_DIR" -type f \( -name '*.cfg' -o -name '*.conf' \) -print0)
+
+    if [[ $injected -eq 0 ]]; then
+        die "--serial-console was requested but no kernel command line was found.
+
+  Searched every .cfg and .conf under ${PROFILE_DIR} for a line containing
+  archisobasedir=, which is where archiso puts the kernel command line. Finding none
+  means the inherited boot loader configuration is not shaped as expected, and the boot
+  test would silently observe nothing. Refusing to build a medium that cannot be tested."
+    fi
+    info "serial console added to ${injected} boot configuration file(s)"
+else
+    info "serial console not requested (pass --serial-console to make the boot observable)"
+fi
 
 # ---------------------------------------------------------------------------
 # Pin the Arch snapshot date

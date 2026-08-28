@@ -12,15 +12,19 @@
 # Writing to the serial port is best-effort: on real hardware there may be no ttyS0,
 # and a live session must never fail to give the user a shell because of a test hook.
 
-if [[ -w /dev/ttyS0 ]]; then
-    {
-        printf 'OBELISK_BOOT_MARKER_OK\n'
-        printf 'obelisk-version: %s\n' "$(. /etc/os-release 2>/dev/null && printf '%s' "${VERSION_ID:-rolling}")"
-        printf 'obelisk-firmware: %s\n' "$([[ -d /sys/firmware/efi ]] && printf 'uefi' || printf 'bios')"
-        printf 'obelisk-kernel: %s\n' "$(uname -r)"
-        printf 'obelisk-boot-seconds: %s\n' "$(cut -d' ' -f1 /proc/uptime 2>/dev/null || printf 'unknown')"
-        printf 'OBELISK_BOOT_MARKER_END\n'
-    } > /dev/ttyS0 2>/dev/null || true
-fi
+# The write is attempted unconditionally rather than guarded by a [[ -w ]] test. If the
+# guard were wrong -- no serial driver loaded, a device node that exists but is not
+# writable -- the marker would silently never appear and a perfectly good boot would look
+# identical to a broken one. Attempting and discarding the failure fails safe in the
+# other direction: on real hardware without a serial port, the redirect simply fails and
+# the user still gets their shell.
+{
+    printf 'OBELISK_BOOT_MARKER_OK\n'
+    printf 'obelisk-version: %s\n' "$(. /etc/os-release 2>/dev/null && printf '%s' "${VERSION_ID:-rolling}")"
+    printf 'obelisk-firmware: %s\n' "$([[ -d /sys/firmware/efi ]] && printf 'uefi' || printf 'bios')"
+    printf 'obelisk-kernel: %s\n' "$(uname -r)"
+    printf 'obelisk-boot-seconds: %s\n' "$(cut -d' ' -f1 /proc/uptime 2>/dev/null || printf 'unknown')"
+    printf 'OBELISK_BOOT_MARKER_END\n'
+} > /dev/ttyS0 2>/dev/null || true
 
 [[ -f /etc/motd ]] && cat /etc/motd

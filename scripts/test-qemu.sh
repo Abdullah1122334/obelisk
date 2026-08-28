@@ -64,7 +64,7 @@ USAGE
 MODE="both"
 RAM_MIB=4096
 CPUS=2
-TIMEOUT=420
+TIMEOUT=1800
 OVMF_PATH=""
 LOG_DIR="out/qemu"
 ISO_PATH=""
@@ -137,6 +137,10 @@ find_ovmf() {
 # One boot attempt
 # ---------------------------------------------------------------------------
 readonly MARKER='OBELISK_BOOT_MARKER_OK'
+readonly POLL_INTERVAL=5
+readonly NL=$'
+'
+ACCEL_USED=""
 
 boot_once() {
     local firmware="$1"
@@ -153,6 +157,18 @@ boot_once() {
         -device virtio-rng-pci
     )
 
+    # Hardware acceleration when it exists. GitHub-hosted standard runners are backed by
+    # Azure VMs whose CPUs do not expose virtualisation, so /dev/kvm is absent and this
+    # falls through to TCG. TCG is roughly an order of magnitude slower, which is why the
+    # default timeout here is generous and why nothing timed from this script may be
+    # published as a performance number.
+    local accel="tcg"
+    if [[ -w /dev/kvm ]]; then
+        accel="kvm"
+        qemu_args+=(-enable-kvm -cpu host)
+    fi
+    ACCEL_USED="$accel"
+
     if [[ "$firmware" == uefi ]]; then
         local ovmf
         if ! ovmf="$(find_ovmf)"; then
@@ -161,54 +177,105 @@ boot_once() {
             return 3
         fi
         info "UEFI firmware: ${ovmf}"
-        # Read-only pflash: we never write back to the shared firmware image.
         qemu_args+=(-drive "if=pflash,format=raw,readonly=on,file=${ovmf}")
     fi
 
     : > "$serial_log"
-    info "booting (${firmware}) — up to ${TIMEOUT}s, no KVM, TCG emulation"
+    info "booting (${firmware}) — accel=${accel}, up to ${TIMEOUT}s"
+    if [[ "$accel" == tcg ]]; then
+        info "  no /dev/kvm: full software emulation, expect roughly 10-20x native"
+    fi
 
     qemu-system-x86_64 "${qemu_args[@]}" &
     local qemu_pid=$!
 
-    local waited=0
-    local found=1
+    # Progress tracking. The question after a timeout is always the same -- was it slow
+    # or was it stuck -- and it is only answerable if we watched. Serial log growth is
+    # the signal: a booting kernel keeps writing, a hung one stops.
+    local waited=0 found=1 last_size=0 size stalled_for=0
+
+    # How long without output before we call it hung. Absolute thresholds are wrong at
+    # both ends: 120s is far too long to wait out a 30s test, and far too twitchy for a
+    # 40-minute TCG run where a single xz-compressed squashfs read can stall output.
+    # A quarter of the timeout, clamped to a sane band, is right at both scales.
+    local stall_threshold=$(( TIMEOUT / 4 ))
+    [[ $stall_threshold -lt 10  ]] && stall_threshold=10
+    [[ $stall_threshold -gt 180 ]] && stall_threshold=180
+    local -i report_every=60 since_report=0
+
     while [[ $waited -lt $TIMEOUT ]]; do
         if grep -qF "$MARKER" "$serial_log" 2>/dev/null; then
             found=0
             break
         fi
         if ! kill -0 "$qemu_pid" 2>/dev/null; then
-            # QEMU exited before the marker appeared.
+            warn "QEMU exited on its own after ${waited}s, before the marker appeared"
             break
         fi
-        sleep 2
-        waited=$((waited + 2))
+
+        size="$(stat -c '%s' -- "$serial_log" 2>/dev/null || echo 0)"
+        if [[ "$size" -gt "$last_size" ]]; then
+            stalled_for=0
+            last_size="$size"
+        else
+            stalled_for=$((stalled_for + POLL_INTERVAL))
+        fi
+
+        since_report=$((since_report + POLL_INTERVAL))
+        if [[ $since_report -ge $report_every ]]; then
+            since_report=0
+            info "  ${waited}s: serial log ${size} bytes, last line: $(tail -n1 -- "$serial_log" 2>/dev/null | tr -d '' | cut -c1-70)"
+        fi
+
+        sleep "$POLL_INTERVAL"
+        waited=$((waited + POLL_INTERVAL))
     done
 
+    # SIGTERM, then SIGKILL if it does not go. A `wait` on a process that ignores or
+    # is slow to handle SIGTERM blocks this script forever, which turns a failed boot
+    # test into a hung CI job -- a worse outcome than the failure it is reporting.
     if kill -0 "$qemu_pid" 2>/dev/null; then
-        kill "$qemu_pid" 2>/dev/null || true
+        kill -TERM "$qemu_pid" 2>/dev/null || true
+        local grace=0
+        while kill -0 "$qemu_pid" 2>/dev/null && [[ $grace -lt 10 ]]; do
+            sleep 1
+            grace=$((grace + 1))
+        done
+        if kill -0 "$qemu_pid" 2>/dev/null; then
+            warn "QEMU ignored SIGTERM after ${grace}s; sending SIGKILL"
+            kill -KILL "$qemu_pid" 2>/dev/null || true
+        fi
         wait "$qemu_pid" 2>/dev/null || true
     fi
 
     if [[ $found -eq 0 ]]; then
-        info "PASS (${firmware}) — reached an interactive shell in ~${waited}s of wall clock"
-        sed -n '/OBELISK_BOOT_MARKER_OK/,/OBELISK_BOOT_MARKER_END/p' "$serial_log" \
-            | sed 's/^/    /'
+        info "PASS (${firmware}) — reached an interactive shell after ~${waited}s of wall clock (accel=${accel})"
+        sed -n "/${MARKER}/,/OBELISK_BOOT_MARKER_END/p" "$serial_log" | sed 's/^/    /'
         return 0
     fi
 
-    printf '\n%s: FAIL (%s) — %s never appeared within %ss\n\n' \
-        "$SCRIPT_NAME" "$firmware" "$MARKER" "$TIMEOUT" >&2
-    printf '  Serial log: %s\n' "$serial_log" >&2
-    printf '  Last 40 lines:\n' >&2
-    tail -n 40 -- "$serial_log" 2>/dev/null | sed 's/^/    /' >&2 || true
-    printf '\n  The marker is written by /root/.bash_profile inside the image. Its absence\n' >&2
-    printf '  means the guest did not reach an autologin shell on tty1. Check, in order:\n' >&2
-    printf '    1. did the boot loader menu appear at all (firmware/boot mode problem)\n' >&2
-    printf '    2. did the kernel and initramfs load (mkinitcpio-archiso problem)\n' >&2
-    printf '    3. did the squashfs mount (iso_label / archisosearchuuid mismatch)\n' >&2
-    printf '    4. did agetty autologin run (airootfs getty drop-in problem)\n\n' >&2
+    printf '%s%s: FAIL (%s) — %s never appeared within %ss%s%s'         "$NL" "$SCRIPT_NAME" "$firmware" "$MARKER" "$TIMEOUT" "$NL" "$NL" >&2
+
+    # The verdict the maintainer actually needs, stated rather than left to inference.
+    if [[ "$last_size" -eq 0 ]]; then
+        printf '  VERDICT: nothing was ever written to the serial port.%s' "$NL" >&2
+        printf '           Either the kernel command line has no console=ttyS0 (build with%s' "$NL" >&2
+        printf '           --serial-console) or the boot never reached the kernel at all.%s%s' "$NL" "$NL" >&2
+    elif [[ "$stalled_for" -ge "$stall_threshold" ]]; then
+        printf '  VERDICT: HUNG. Output stopped %ss before the timeout (threshold %ss), at %s bytes.%s' "$stalled_for" "$stall_threshold" "$last_size" "$NL" >&2
+        printf '           Raising the timeout will not help. The last lines below are%s' "$NL" >&2
+        printf '           where it stopped.%s%s' "$NL" "$NL" >&2
+    else
+        printf '  VERDICT: STILL PROGRESSING at the timeout (%s bytes, last write %ss ago).%s' "$last_size" "$stalled_for" "$NL" >&2
+        printf '           This is a timeout that is too short, not a broken image.%s' "$NL" >&2
+        printf '           Re-run with a larger --timeout.%s%s' "$NL" "$NL" >&2
+    fi
+
+    printf '  accel     : %s%s' "$accel" "$NL" >&2
+    printf '  serial log: %s (%s bytes, kept as a CI artifact)%s%s' "$serial_log" "$last_size" "$NL" "$NL" >&2
+    printf '  Full serial output follows.%s%s' "$NL" "$NL" >&2
+    sed 's/^/    /' -- "$serial_log" 2>/dev/null >&2 || true
+    printf '%s' "$NL" >&2
     return 1
 }
 
@@ -236,6 +303,7 @@ for m in "${MODES[@]}"; do
 done
 
 printf '\n[%s] summary\n' "$SCRIPT_NAME"
+printf '  accel:   %s\n' "${ACCEL_USED:-unknown}"
 [[ ${#PASSED[@]}  -gt 0 ]] && printf '  passed:  %s\n' "${PASSED[*]}"
 [[ ${#SKIPPED[@]} -gt 0 ]] && printf '  skipped: %s\n' "${SKIPPED[*]}"
 [[ ${#FAILED[@]}  -gt 0 ]] && printf '  FAILED:  %s\n' "${FAILED[*]}"

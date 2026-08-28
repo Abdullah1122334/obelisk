@@ -176,8 +176,68 @@ jobs:
               # The required deps are listed too, so this line documents the whole build surface.
               pacman -Syu --noconfirm --needed \
                 archiso grub edk2-ovmf qemu-base arch-install-scripts dosfstools e2fsprogs erofs-utils libarchive libisoburn mtools squashfs-tools curl rsync
-              bash scripts/build-iso.sh
+              bash scripts/build-iso.sh --serial-console
             '
+
+      # Uploaded here, directly after mkarchiso and BEFORE the boot test, with
+      # if: always(). The ISO is the expensive output of this workflow -- roughly
+      # 16 minutes of build time -- and a failing boot test is precisely when the
+      # maintainer most needs the image in hand to reproduce the failure on real
+      # hardware. Gating the upload on a later step meant a perfectly good ISO was
+      # discarded with the runner. The boot test still fails the job; it just no
+      # longer decides whether the artifact survives.
+
+      # Measured immediately after the build and written to the run summary, so the
+      # first real number against the 3.5 GB ceiling is visible without digging
+      # through logs, and survives a failing boot test. Recorded per release in
+      # docs/PERFORMANCE.md -- see the rule there about which numbers CI may publish.
+      - name: Measure and record ISO size
+        if: always()
+        run: |
+          set -uo pipefail
+          iso="$(find out -maxdepth 1 -name "*.iso" -print -quit 2>/dev/null || true)"
+          if [ -z "$iso" ]; then
+            echo "no ISO produced"
+            echo "### ISO: not produced" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          bytes="$(stat -c %s "$iso")"
+          mib=$(( bytes / 1024 / 1024 ))
+          ceiling=3584
+          pct=$(( mib * 100 / ceiling ))
+          {
+            echo "iso_path=$iso"
+            echo "iso_bytes=$bytes"
+            echo "iso_mib=$mib"
+            echo "ceiling_mib=$ceiling"
+            echo "headroom_mib=$(( ceiling - mib ))"
+            echo "commit=${GITHUB_SHA}"
+            echo "archive_snapshot=${OBELISK_ARCHIVE_DATE:-unset}"
+          } | tee out/iso-size.txt
+          {
+            echo "## ISO size"
+            echo ""
+            echo "| metric | value |"
+            echo "|---|---|"
+            echo "| size | ${mib} MiB (${bytes} bytes) |"
+            echo "| ceiling | ${ceiling} MiB |"
+            echo "| used | ${pct}% |"
+            echo "| headroom | $(( ceiling - mib )) MiB |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          ls -lh out/*.iso
+          df -h /
+      - name: Upload ISO
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: obelisk-iso
+          path: |
+            out/*.iso
+            out/*.iso.sha256
+            out/iso-size.txt
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0   # an ISO is already compressed; recompressing wastes time
 
       - name: Boot the ISO under BIOS and UEFI
         run: |
@@ -189,27 +249,10 @@ jobs:
               pacman -Syu --noconfirm --needed qemu-base edk2-ovmf
               # No /dev/kvm on GitHub-hosted runners: this is TCG emulation, so the
               # timeout is generous and the timings are NOT performance measurements.
-              bash scripts/test-qemu.sh --mode both --timeout 600
+              echo "--- accelerator availability on this runner ---"
+              if [ -e /dev/kvm ]; then ls -l /dev/kvm; else echo "no /dev/kvm: TCG software emulation only"; fi
+              bash scripts/test-qemu.sh --mode both --timeout 2400
             '
-
-      - name: Report artifact size
-        if: always()
-        run: |
-          set -euo pipefail
-          ls -lh out/*.iso 2>/dev/null || echo "no ISO produced"
-          df -h /
-
-      - name: Upload ISO
-        if: success()
-        uses: actions/upload-artifact@v7
-        with:
-          name: obelisk-iso
-          path: |
-            out/*.iso
-            out/*.iso.sha256
-          if-no-files-found: error
-          retention-days: 14
-          compression-level: 0   # an ISO is already compressed; recompressing wastes time
 
       - name: Upload build diagnostics
         if: always()
@@ -218,7 +261,9 @@ jobs:
           name: obelisk-build-diagnostics
           path: |
             out/profile-manifest.txt
-            out/qemu/*.log
+            out/iso-size.txt
+            out/qemu/
+
           if-no-files-found: warn
           retention-days: 14
 

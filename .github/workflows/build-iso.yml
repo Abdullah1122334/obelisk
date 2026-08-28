@@ -1,0 +1,186 @@
+name: build-iso
+
+# Obelisk is developed on Windows and cannot be built there: mkarchiso needs an Arch
+# host, root, and loop devices. This workflow is therefore not a convenience, it is the
+# reference build path. See docs/ARCHITECTURE.md section 2.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-iso-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Gate 1: the checks that are cheap and catch the failures that cost the most.
+  # ---------------------------------------------------------------------------
+  lint:
+    name: line endings and shell lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # This runs before anything else on purpose. A CRLF that reaches Linux produces
+      # "bad interpreter", which points at the interpreter instead of the real cause.
+      - name: Check line endings and encoding
+        run: bash scripts/check-line-endings.sh
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Shellcheck
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.sh')
+          printf 'checking %d shell script(s)\n' "${#files[@]}"
+          shellcheck --severity=warning "${files[@]}"
+
+      - name: Verify no Arch branding in tracked user-visible files
+        run: |
+          set -euo pipefail
+          # docs/ and comments may legitimately mention Arch: Obelisk is based on it and
+          # docs/LEGAL.md requires us to say so. What must not appear is Arch branding in
+          # what the user sees. This is the Phase 1 seed of the Phase 11 scan.
+          if git ls-files 'iso/airootfs/**' | xargs -r grep -lni 'arch linux' ; then
+            echo "::error::Arch branding found in iso/airootfs (see docs/LEGAL.md)"
+            exit 1
+          fi
+          echo "no Arch branding in iso/airootfs"
+
+  # ---------------------------------------------------------------------------
+  # Gate 2: build the ISO and prove it boots.
+  # ---------------------------------------------------------------------------
+  build:
+    name: build ISO and boot it
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # An ISO build needs far more room than a stock runner leaves free. Reclaim it on
+      # the HOST before starting the container, which is why this workflow runs docker
+      # by hand instead of using the job-level `container:` key.
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          echo "before:"; df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          echo "after:"; df -h /
+        env:
+          AGENT_TOOLSDIRECTORY: /opt/hostedtoolcache
+
+      # Reproducible ISO version and label: derived from the commit, not from the clock.
+      - name: Compute SOURCE_DATE_EPOCH
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+
+      - name: Create config.env
+        run: |
+          set -euo pipefail
+          cp config.env.example config.env
+          # Values that are genuinely maintainer-supplied stay empty here. The build is
+          # designed to succeed without them: no fake URL or key is ever substituted.
+          {
+            echo "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}"
+            echo "OBELISK_URL=${OBELISK_URL}"
+          } >> config.env
+          echo "--- effective config (secrets are never printed) ---"
+          grep -v '^#' config.env | grep -v '^$' || true
+        env:
+          # Empty unless the maintainer sets the repository variable. Omitted, not faked.
+          OBELISK_URL: ${{ vars.OBELISK_URL }}
+
+      # The container is privileged because mkarchiso must create device nodes and mount
+      # loop devices. The build TOOLING (archiso, qemu) comes from Arch's current
+      # repositories; the ISO CONTENTS come from the pinned Arch Linux Archive snapshot
+      # configured in iso/pacman.conf. Those are deliberately two different things.
+      - name: Build ISO in a privileged Arch container
+        run: |
+          set -euo pipefail
+          docker run --rm --privileged \
+            -v "${PWD}:/build" -w /build \
+            -e SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            archlinux:latest bash -euo pipefail -c '
+              pacman -Syu --noconfirm --needed \
+                archiso qemu-base edk2-ovmf curl rsync
+              bash scripts/build-iso.sh
+            '
+
+      - name: Boot the ISO under BIOS and UEFI
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${PWD}:/build" -w /build \
+            -e CI=true \
+            archlinux:latest bash -euo pipefail -c '
+              pacman -Syu --noconfirm --needed qemu-base edk2-ovmf
+              # No /dev/kvm on GitHub-hosted runners: this is TCG emulation, so the
+              # timeout is generous and the timings are NOT performance measurements.
+              bash scripts/test-qemu.sh --mode both --timeout 600
+            '
+
+      - name: Report artifact size
+        if: always()
+        run: |
+          set -euo pipefail
+          ls -lh out/*.iso 2>/dev/null || echo "no ISO produced"
+          df -h /
+
+      - name: Upload ISO
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: obelisk-iso
+          path: |
+            out/*.iso
+            out/*.iso.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0   # an ISO is already compressed; recompressing wastes time
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: obelisk-build-diagnostics
+          path: |
+            out/profile-manifest.txt
+            out/qemu/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Publish: only for v* tags, and only after the ISO has been proven to boot.
+  # ---------------------------------------------------------------------------
+  release:
+    name: publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: obelisk-iso
+          path: release
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.iso
+            release/*.iso.sha256
+          draft: true       # a human confirms before an ISO is published to the world
+          generate_release_notes: true

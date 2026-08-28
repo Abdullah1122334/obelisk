@@ -1,0 +1,60 @@
+# Obelisk ISO package set.
+#
+# Phase 1 scope: a live medium that boots to a text console under both BIOS and UEFI.
+# The desktop (Plasma 6), the installer (Calamares), and the Obelisk packages arrive in
+# later phases. Every name below was verified against archlinux.org/packages; nothing
+# here is guessed.
+#
+# Decision D1 (docs/ARCHITECTURE.md): the Windows compatibility layer, the VM stack,
+# graphics drivers, and codecs are deliberately NOT on this medium. The first-run
+# wizard fetches them after install. That is what keeps the ISO inside 3.5 GB and out
+# of the way of the licensing rules in docs/LEGAL.md.
+
+# --- base system -----------------------------------------------------------
+base
+linux
+linux-lts
+linux-firmware
+
+# --- initramfs -------------------------------------------------------------
+mkinitcpio
+mkinitcpio-archiso
+mkinitcpio-nfs-utils
+
+# --- boot loaders ----------------------------------------------------------
+# syslinux serves BIOS, grub serves UEFI. See bootmodes in profiledef.sh.
+syslinux
+grub
+efibootmgr
+edk2-shell
+
+# --- filesystems -----------------------------------------------------------
+# btrfs-progs is not optional: the whole unbreakability model in Phase 6 is Btrfs.
+btrfs-progs
+dosfstools
+e2fsprogs
+exfatprogs
+f2fs-tools
+xfsprogs
+ntfs-3g
+
+# --- partitioning ----------------------------------------------------------
+gptfdisk
+parted
+
+# --- networking ------------------------------------------------------------
+networkmanager
+wireless-regdb
+
+# --- installation tooling --------------------------------------------------
+arch-install-scripts
+pacman-contrib
+
+# --- console usability -----------------------------------------------------
+# The live console must be usable before any desktop exists, and terminus-font is
+# what makes a HiDPI console readable at all.
+terminus-font
+nano
+less
+sudo
+which

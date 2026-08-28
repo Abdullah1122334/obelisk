@@ -1,0 +1,6 @@
+# Obelisk generates three locales. Arabic and English are peers, not a base language
+# and a translation, so both Arabic variants are generated on every medium — the live
+# session must be able to switch language without downloading anything.
+en_US.UTF-8 UTF-8
+ar_EG.UTF-8 UTF-8
+ar_SA.UTF-8 UTF-8

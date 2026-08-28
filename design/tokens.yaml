@@ -1,0 +1,259 @@
+# Obelisk design tokens — the single source of truth for the entire look.
+#
+# Nothing in this repository hand-writes a color, a font size, a radius, or a duration.
+# design/generate.py reads this file and emits every theme file: Plasma color schemes,
+# the look-and-feel package, SDDM QML variables, Plymouth colors, GRUB theme.txt,
+# Calamares stylesheet.qss and branding.desc, obelisk-welcome QML variables, and the
+# docs site CSS. If a surface does not change when a value here changes, that surface
+# is hand-written and it is a bug.
+#
+# Values written as {group.step} are references, resolved by generate.py.
+
+meta:
+  name: Obelisk
+  tagline_en: "Cut from one stone."
+  tagline_ar: "من حجرٍ واحد"
+  version: 1
+  default_theme: dark   # dark is the default; light is equally finished, not an afterthought
+
+# ---------------------------------------------------------------------------
+# 1. Palette
+# ---------------------------------------------------------------------------
+# granite  — a cool deep grey-blue neutral. The stone the whole thing is cut from.
+#            Hue held near 213 deg across the ramp so surfaces never drift warm.
+# electrum — the pyramidion. Real obelisks were capped with electrum, a pale
+#            gold-silver alloy, to catch the sunrise. Deliberately paler and cooler
+#            than brass gold. It is the ACCENT, never the primary interactive color:
+#            saturated gold cannot carry body text at WCAG AA on a light surface.
+# lapis    — the primary interactive color. Selection, links, focus on light.
+#            Same hue family as granite, so it reads as the stone lit rather than a
+#            second unrelated brand color.
+# patina   — secondary emphasis. Oxidised bronze, used sparingly.
+
+palette:
+  granite:
+    0:    "#F7F9FB"
+    50:   "#EEF2F6"
+    100:  "#E2E8EF"
+    200:  "#C9D3DE"
+    300:  "#AAB8C7"
+    400:  "#8998AA"
+    500:  "#6B7A8D"
+    600:  "#536073"
+    700:  "#3E4A5A"
+    800:  "#2C3543"
+    900:  "#1E2530"
+    950:  "#151A22"
+    1000: "#0D1116"
+
+  electrum:
+    100: "#FBF0D3"
+    300: "#F0D791"
+    400: "#E6C671"
+    500: "#D9B15A"
+    600: "#BF9540"
+    700: "#7A5D1C"   # dark enough to carry body text on a light surface
+
+  lapis:
+    100: "#DCEAF9"
+    300: "#9CC6F2"
+    400: "#6BA5E7"
+    500: "#3D82D1"
+    600: "#2A66AE"
+    700: "#1B4C87"
+
+  patina:
+    400: "#5FB5A8"
+    600: "#2F7A70"
+
+  semantic:
+    success: { on_dark: "#5FC98A", on_light: "#1B6E42" }
+    warning: { on_dark: "#E8B44C", on_light: "#8A5E12" }
+    danger:  { on_dark: "#F0827B", on_light: "#A32B26" }
+    info:    { on_dark: "{lapis.400}", on_light: "{lapis.700}" }
+
+# ---------------------------------------------------------------------------
+# 2. Themes — roles, not colors. Every surface consumes roles.
+# ---------------------------------------------------------------------------
+themes:
+  dark:
+    background:      "{granite.950}"
+    surface:         "{granite.900}"
+    surface_raised:  "{granite.800}"
+    text_primary:    "{granite.50}"
+    text_secondary:  "{granite.200}"
+    text_muted:      "{granite.400}"
+    text_disabled:   "{granite.600}"   # WCAG-exempt: inactive component
+    primary:         "{lapis.400}"
+    on_primary:      "{granite.1000}"
+    accent:          "{electrum.400}"
+    accent_solid:    "{electrum.500}"
+    on_accent:       "{granite.1000}"
+    secondary:       "{patina.400}"
+    selection_bg:    "{lapis.600}"
+    selection_fg:    "{granite.50}"
+    border_subtle:   "{granite.800}"   # decorative separator, WCAG-exempt
+    border_strong:   "{granite.500}"   # input outline, must clear 3:1
+    focus_ring:      "{electrum.400}"  # 10.54:1 against background
+    focus_ring_offset_color: "{granite.950}"
+
+  light:
+    background:      "{granite.0}"
+    surface:         "#FFFFFF"
+    surface_raised:  "#FFFFFF"
+    text_primary:    "{granite.900}"
+    text_secondary:  "{granite.700}"
+    text_muted:      "{granite.600}"
+    text_disabled:   "{granite.400}"   # WCAG-exempt: inactive component
+    primary:         "{lapis.600}"
+    on_primary:      "#FFFFFF"
+    accent:          "{electrum.700}"
+    accent_solid:    "{electrum.500}"
+    on_accent:       "{granite.1000}"
+    secondary:       "{patina.600}"
+    selection_bg:    "{lapis.100}"
+    selection_fg:    "{granite.900}"
+    border_subtle:   "{granite.200}"
+    border_strong:   "{granite.500}"
+    focus_ring:      "{electrum.700}"  # 5.84:1 against background
+    focus_ring_offset_color: "{granite.0}"
+
+# ---------------------------------------------------------------------------
+# 3. Typography
+# ---------------------------------------------------------------------------
+# IBM Plex Sans + IBM Plex Sans Arabic are a single designed family, drawn together,
+# sharing skeleton weight and rhythm. That is what stops a mixed-script line from
+# looking like two fonts fighting. VERIFIED: the official Arch package ttf-ibm-plex
+# (extra, 6.4.0) already ships IBM Plex Sans Arabic in 8 weights — so the whole
+# bilingual pairing costs one package and no AUR dependency.
+#
+# arabic_size_adjust exists because Arabic set at the same point size as Latin reads
+# smaller and denser: the script carries more fine detail in joins and diacritics.
+# arabic_line_height is larger for the same reason — ascenders, descenders, and marks
+# need vertical room. Encoding both here stops each surface from improvising.
+
+typography:
+  families:
+    sans_latin:  "IBM Plex Sans"
+    sans_arabic: "IBM Plex Sans Arabic"
+    mono:        "IBM Plex Mono"
+    display:     "IBM Plex Sans"
+  package: ttf-ibm-plex        # extra/ttf-ibm-plex — provides all four of the above
+
+  scale_ratio: 1.200           # minor third: enough hierarchy for UI, no drama
+  sizes:                       # px
+    xs:   11
+    sm:   12
+    base: 14                   # desktop UI base; docs override to 16
+    lg:   16
+    xl:   19
+    2xl:  23
+    3xl:  28
+    4xl:  33
+    5xl:  40
+
+  weights:
+    regular:  400
+    medium:   500
+    semibold: 600
+    bold:     700
+
+  line_height:
+    tight:   1.25
+    normal:  1.50
+    relaxed: 1.70
+
+  arabic:
+    size_adjust:  1.08         # multiply computed size when the run is Arabic
+    line_height:  1.70         # Arabic never uses `tight`
+    synthetic_bold: false      # never fake-bold Arabic; use a real weight
+
+# ---------------------------------------------------------------------------
+# 4. Spacing, radius, elevation, motion
+# ---------------------------------------------------------------------------
+# Radii are deliberately small. An obelisk is cut, not moulded; soft corners would
+# argue with the identity. 12px is the largest radius in the system.
+
+spacing:
+  unit: 4                      # px; every value below is a multiple
+  scale: [0, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64, 96]
+
+radius:
+  none: 0
+  sm:   2
+  md:   4
+  lg:   8
+  xl:   12
+  full: 9999                   # pills and avatars only
+
+elevation:
+  # Shadows are tinted with granite.1000, never neutral black: a black shadow on a
+  # blue-grey surface reads muddy. Shadows do NOT mirror in RTL.
+  tint: "{granite.1000}"
+  levels:
+    0: "none"
+    1: "0 1px 2px rgba(TINT, 0.14)"
+    2: "0 2px 6px rgba(TINT, 0.18)"
+    3: "0 6px 16px rgba(TINT, 0.22)"
+    4: "0 12px 32px rgba(TINT, 0.26)"
+
+motion:
+  # The brief's ceiling is 200ms, and it is correct: slow animation reads as a slow
+  # computer, and this distribution's claim is that it runs on hardware Windows 11
+  # rejects. Nothing here may be raised without changing that claim.
+  duration:
+    instant: 0
+    fast:    120               # hovers, ripples, toggles
+    base:    160               # the default for anything that moves
+    slow:    200               # ceiling: page and view transitions only
+  easing:
+    standard:   "cubic-bezier(0.2, 0.0, 0.0, 1.0)"   # ease-out
+    decelerate: "cubic-bezier(0.0, 0.0, 0.2, 1.0)"
+    accelerate: "cubic-bezier(0.4, 0.0, 1.0, 1.0)"
+  reduced_motion_duration: 0   # honour prefers-reduced-motion by collapsing to 0
+
+# ---------------------------------------------------------------------------
+# 5. Accessibility contract
+# ---------------------------------------------------------------------------
+accessibility:
+  standard: "WCAG 2.2 AA"
+  requirements:
+    body_text: 4.5             # 1.4.3
+    large_text: 3.0            # >= 18.66px bold or >= 24px
+    ui_component: 3.0          # 1.4.11 — input outlines, focus rings
+  exempt:
+    - text_disabled            # 1.4.3 incidental: inactive component
+    - border_subtle            # decorative separator, carries no state
+  # Ratios for all 44 role pairs are computed by design/generate.py and written to
+  # docs/DESIGN-CONTRAST.md on every run. CI fails if any non-exempt pair drops below
+  # its requirement. Measured 2026-08-28: 44 pairs checked, 0 failures,
+  # worst non-exempt pair 4.81:1 (light secondary/patina), 22 pairs at AAA.
+
+# ---------------------------------------------------------------------------
+# 6. Focus indicator
+# ---------------------------------------------------------------------------
+# The focus ring is electrum in BOTH themes, because focus means the same thing in
+# both and a role that changes colour between themes is not a role.
+#
+# It is drawn with an OFFSET, and that offset is not cosmetic. Measured directly
+# against the components it surrounds, electrum and lapis are nearly the same
+# luminance:
+#
+#     electrum-700 vs lapis-600 : 1.06:1
+#     electrum-400 vs lapis-400 : 1.55:1
+#
+# A gold ring painted flush against a blue button would therefore be invisible to
+# anyone who cannot rely on hue alone. The offset ring in the background colour
+# guarantees the indicator is always measured against the BACKGROUND, where it clears
+# 3:1 in both themes, instead of against the component fill, where it does not.
+
+focus:
+  width: 2          # px, the electrum ring itself
+  offset: 2         # px of background colour between component and ring
+  style: solid
+  # Required contrast is ring against background, never ring against component.
+  min_contrast_vs_background: 3.0
+
+icons:
+  theme: obelisk               # one icon theme system-wide, recolored from these tokens
+  base: breeze                 # recolored, not replaced: keeps Plasma coverage complete

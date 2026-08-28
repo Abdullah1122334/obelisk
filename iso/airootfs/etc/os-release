@@ -1,0 +1,7 @@
+NAME="Obelisk"
+PRETTY_NAME="Obelisk Linux"
+ID=obelisk
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="0;38;2;230;198;113"
+LOGO=obelisk

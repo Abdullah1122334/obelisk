@@ -1,0 +1,14 @@
+
+  Obelisk Live  —  Cut from one stone.
+
+  This is a live session. Nothing has been written to your disks.
+
+    obeliskctl --help     Obelisk command line tools
+    loadkeys <layout>     change the console keyboard layout
+    nmtui                 connect to a network
+
+  Documentation is bilingual (English / Arabic) in the graphical session.
+  The Linux text console cannot shape or lay out Arabic script, so this
+  message is English only by necessity, not by choice. Arabic begins at
+  the graphical session, where it is a first-class language.
+

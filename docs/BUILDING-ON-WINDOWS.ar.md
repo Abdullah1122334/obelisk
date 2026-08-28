@@ -151,7 +151,7 @@ winget install --id Rufus.Rufus -e
 |---|---|
 | تبني الصورة | ادفع، أو `gh workflow run build-iso.yml` |
 | تبني حزمة | `repo/build-packages.sh` في المرحلة الثانية يعمل في CI كالصورة تمامًا |
-| تُشغّل `shellcheck` | يُشغّله CI في كل دفعة. ومحليًّا: `winget install koalaman.shellcheck` |
+| تُشغّل `shellcheck` | يُشغّله CI في كل دفعة. ومحليًّا من Git Bash في جذر المستودع، استخدم الأعلام نفسها التي يستخدمها CI وإلا ظهرت لك تحذيرات كاذبة لا يراها CI: `shellcheck -x -P "$(git rev-parse --show-toplevel)" --severity=warning $(git ls-files "*.sh")` |
 | تفحص نظام الملفات المبني | نزّل ناتج التشخيصات، أو استخدم آلة آرتش افتراضية |
 | تُكرِّر بسرعة على `airootfs` | آلة آرتش افتراضية مُسرِّع حقيقي هنا — لكنها ليست شرطًا أبدًا |
 

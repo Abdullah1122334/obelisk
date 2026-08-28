@@ -23,6 +23,20 @@
 
 set -euo pipefail
 
+# ShellCheck note: the shell prompt below is not decoration. A comment beginning with
+# "# shellcheck" is parsed as a DIRECTIVE, so an example command written that way fails
+# with SC1072/SC1073. The "$ " prefix keeps it a comment.
+#
+# The `source=` directives below are relative to the REPOSITORY ROOT, not to
+# this file. Run shellcheck with external sources enabled and the root as its search
+# path, exactly as CI does:
+#
+#     $ shellcheck -x -P "$(git rev-parse --show-toplevel)" --severity=warning scripts/*.sh
+#
+# Resolving the source properly is deliberate. It lets ShellCheck see that bootmodes and
+# file_permissions are assigned by iso/profiledef.sh, so no blanket `disable=` directive
+# is needed and genuine SC2034/SC2154 findings stay detectable everywhere else.
+
 readonly SCRIPT_NAME="${0##*/}"
 REPO_ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 readonly REPO_ROOT
@@ -169,7 +183,7 @@ read_declared_bootmodes() {
     err="$(
         set +u
         declare -A file_permissions
-        # shellcheck source=../iso/profiledef.sh
+        # shellcheck source=iso/profiledef.sh
         . "${REPO_ROOT}/iso/profiledef.sh" 2>&1 >/dev/null
     )" || rc=$?
 
@@ -184,7 +198,7 @@ read_declared_bootmodes() {
     (
         set +u
         declare -A file_permissions
-        # shellcheck source=../iso/profiledef.sh
+        # shellcheck source=iso/profiledef.sh
         . "${REPO_ROOT}/iso/profiledef.sh" >/dev/null
         printf '%s
 ' "${bootmodes[@]}"

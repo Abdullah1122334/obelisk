@@ -37,12 +37,21 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
+      # -x follows `source=` directives so ShellCheck can see that bootmodes and
+      # file_permissions are assigned by iso/profiledef.sh. -P anchors the search path
+      # to the repository root, which is what those directives are written against, and
+      # makes the result independent of the working directory.
+      #
+      # Resolving the source is preferred over blanket disable=SC2034,SC2154 directives:
+      # a disable would also hide a genuine unassigned variable in the same file, whereas
+      # this keeps every real finding detectable.
       - name: Shellcheck
         run: |
           set -euo pipefail
-          mapfile -t files < <(git ls-files '*.sh')
-          printf 'checking %d shell script(s)\n' "${#files[@]}"
-          shellcheck --severity=warning "${files[@]}"
+          root="$(git rev-parse --show-toplevel)"
+          mapfile -t files < <(git ls-files "*.sh")
+          echo "checking ${#files[@]} shell script(s) with external sources enabled"
+          shellcheck -x -P "$root" --severity=warning "${files[@]}"
 
       # WARNING, not a failure, and that is deliberate for Phase 1.
       #

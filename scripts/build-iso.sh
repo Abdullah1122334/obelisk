@@ -31,6 +31,21 @@ die()  { printf '\n%s: error: %s\n\n' "$SCRIPT_NAME" "$1" >&2; exit "${2:-2}"; }
 info() { printf '[%s] %s\n' "$SCRIPT_NAME" "$1"; }
 warn() { printf '[%s] warning: %s\n' "$SCRIPT_NAME" "$1" >&2; }
 
+# Under `set -e` a non-zero return terminates this script with NO output at all. That
+# turns a one-line bug into a blind investigation, so every abort explains itself. This
+# trap is the backstop for any failure that slips past an explicit guard.
+on_err() {
+    local exit_code=$? line=$1 cmd=$2
+    printf '\n%s: FAILED\n' "$SCRIPT_NAME" >&2
+    printf '  exit code : %s\n' "$exit_code" >&2
+    printf '  line      : %s\n' "$line" >&2
+    printf '  command   : %s\n' "$cmd" >&2
+    printf '  function  : %s\n' "${FUNCNAME[1]:-main}" >&2
+    printf '\n  If this message is the only diagnostic, the failing command wrote nothing\n  to stderr. That is a bug in this script, not in your environment.\n\n' >&2
+    exit "$exit_code"
+}
+trap 'on_err "$LINENO" "$BASH_COMMAND"' ERR
+
 usage() {
     cat <<'USAGE'
 Usage: sudo ./scripts/build-iso.sh [OPTIONS]
@@ -129,52 +144,166 @@ info "archiso ${ARCHISO_VERSION}"
 # ---------------------------------------------------------------------------
 # Verify bootmodes against what mkarchiso actually implements
 # ---------------------------------------------------------------------------
-# Documentation and tutorials disagree about the valid bootmode strings, and they have
-# changed across archiso releases. Rather than trust any of them, read the truth out of
-# the installed mkarchiso: each supported mode has a corresponding shell function.
-verify_bootmodes() {
-    local mkarchiso_path supported declared missing=()
-    mkarchiso_path="$(command -v mkarchiso)"
+# Documentation, the ArchWiki, and the GitHub mirror disagree about the valid bootmode
+# strings, and they have changed across archiso releases. Rather than trust any of them,
+# read the truth out of the installed mkarchiso.
+#
+# HISTORY, so this is not reintroduced: the first version of this function sourced
+# profiledef.sh with `>/dev/null 2>&1`. profiledef.sh could not be sourced standalone
+# because file_permissions is an associative array literal with no `declare -A`, so the
+# source failed, the redirect swallowed the error, and the function silently compared
+# against an EMPTY list -- it verified nothing for its entire existence, while errexit
+# killed the whole script with no output at all. Two rules came out of that:
+#   1. never redirect the stderr of something whose failure can abort the run;
+#   2. print what a check found even when it passes, so one run answers the question.
 
-    mapfile -t supported < <(
-        grep -oE '^[[:space:]]*_make_bootmode_[A-Za-z0-9._-]+' "$mkarchiso_path" \
-            | sed 's/^[[:space:]]*_make_bootmode_//' | sort -u
+read_declared_bootmodes() {
+    # Prints the declared bootmodes, one per line. Returns non-zero on failure and
+    # writes the reason to stderr.
+    #
+    # NOTE: this runs in the caller's shell via command substitution, which is itself a
+    # subshell -- so this function must RETURN a status rather than call die(). An exit
+    # inside a subshell cannot abort the parent, and an earlier version of this code got
+    # that wrong: it printed an error and then carried on regardless.
+    local err rc=0
+    err="$(
+        set +u
+        declare -A file_permissions
+        # shellcheck source=../iso/profiledef.sh
+        . "${REPO_ROOT}/iso/profiledef.sh" 2>&1 >/dev/null
+    )" || rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        printf 'source failed with exit %s
+' "$rc" >&2
+        printf '%s
+' "${err:-(the source wrote nothing to stderr, which is itself a bug)}" >&2
+        return "$rc"
+    fi
+
+    (
+        set +u
+        declare -A file_permissions
+        # shellcheck source=../iso/profiledef.sh
+        . "${REPO_ROOT}/iso/profiledef.sh" >/dev/null
+        printf '%s
+' "${bootmodes[@]}"
     )
+}
 
-    if [[ ${#supported[@]} -eq 0 ]]; then
-        warn "could not determine supported bootmodes from ${mkarchiso_path};"
-        warn "skipping verification — mkarchiso will report any invalid mode itself."
+detect_supported_bootmodes() {
+    # Several strategies, because we do not know which one archiso 89 satisfies. Each
+    # reports what it found so a single CI run answers the question for good.
+    local mkarchiso_path="$1"
+    local -a found=()
+
+    mapfile -t found < <(
+        grep -oE '^[[:space:]]*_make_bootmode_[A-Za-z0-9._-]+[[:space:]]*\(\)' "$mkarchiso_path" 2>/dev/null \
+            | sed -E 's/^[[:space:]]*_make_bootmode_//; s/[[:space:]]*\(\)$//' | sort -u
+    )
+    if [[ ${#found[@]} -gt 0 ]]; then
+        printf 'function-definitions\t%s\n' "${found[*]}"
         return 0
     fi
 
-    # shellcheck disable=SC1090
-    declared=$(
-        # Source our profiledef in a subshell purely to read the array.
-        set +u
-        . "${REPO_ROOT}/iso/profiledef.sh" >/dev/null 2>&1
-        printf '%s\n' "${bootmodes[@]}"
+    mapfile -t found < <(
+        grep -oE '_make_bootmode_[A-Za-z0-9._-]+' "$mkarchiso_path" 2>/dev/null \
+            | sed -E 's/^_make_bootmode_//' | sort -u
     )
+    if [[ ${#found[@]} -gt 0 ]]; then
+        printf 'function-references\t%s\n' "${found[*]}"
+        return 0
+    fi
+
+    # Last resort: whatever the installed releng profile declares is, by definition,
+    # supported by the mkarchiso shipped alongside it.
+    if [[ -f "${RELENG_BASE}/profiledef.sh" ]]; then
+        mapfile -t found < <(
+            sed -n '/^bootmodes=(/,/)/p' "${RELENG_BASE}/profiledef.sh" \
+                | grep -oE "'[^']+'" | tr -d "'" | sort -u
+        )
+        if [[ ${#found[@]} -gt 0 ]]; then
+            printf 'releng-profile\t%s\n' "${found[*]}"
+            return 0
+        fi
+    fi
+
+    printf 'none\t\n'
+    return 0
+}
+
+verify_bootmodes() {
+    local mkarchiso_path detection method supported_str
+    local -a supported=() declared=() missing=()
+
+    mkarchiso_path="$(command -v mkarchiso)"
+    info "mkarchiso: ${mkarchiso_path}"
+
+    local declared_raw
+    if ! declared_raw="$(read_declared_bootmodes)"; then
+        die "cannot read bootmodes from iso/profiledef.sh.
+
+  The reason is printed immediately above this message. This file must be sourceable on
+  its own, because this script and the lint suite both read it. Note that 'bash -n' will
+  NOT catch the usual cause: an associative array literal such as file_permissions needs
+  a prior 'declare -A', or bash evaluates the subscript as arithmetic." 1
+    fi
+
+    # Blank lines are stripped deliberately. printf on an unset array emits one empty
+    # line, which an earlier version counted as a valid bootmode -- so the emptiness
+    # check passed while verifying nothing at all.
+    mapfile -t declared < <(printf '%s
+' "$declared_raw" | sed '/^[[:space:]]*$/d')
+
+    if [[ ${#declared[@]} -eq 0 ]]; then
+        die "iso/profiledef.sh sourced cleanly but declared no bootmodes.
+
+  The bootmodes array is empty or missing. Without it mkarchiso produces a medium that
+  cannot boot on any firmware." 1
+    fi
+    info "bootmodes declared in iso/profiledef.sh: ${declared[*]}"
+
+    detection="$(detect_supported_bootmodes "$mkarchiso_path")"
+    method="${detection%%$'\t'*}"
+    supported_str="${detection#*$'\t'}"
+    read -r -a supported <<< "$supported_str"
+
+    # Printed unconditionally. A passing run must still answer "what does this archiso
+    # actually support", because that is the question that cost us a CI cycle.
+    info "bootmode detection method: ${method}"
+    if [[ ${#supported[@]} -gt 0 ]]; then
+        info "bootmodes supported by archiso ${ARCHISO_VERSION}: ${supported[*]}"
+    fi
+
+    if [[ "$method" == none || ${#supported[@]} -eq 0 ]]; then
+        warn "could not determine the supported bootmodes from ${mkarchiso_path}"
+        warn "or from ${RELENG_BASE}/profiledef.sh."
+        warn "proceeding: mkarchiso itself will reject an invalid mode with its own error."
+        return 0
+    fi
 
     local mode
-    while IFS= read -r mode; do
+    for mode in "${declared[@]}"; do
         [[ -n "$mode" ]] || continue
-        if ! printf '%s\n' "${supported[@]}" | grep -qxF "$mode"; then
+        if ! printf '%s\n' "${supported[@]}" | grep -qxF -- "$mode"; then
             missing+=("$mode")
         fi
-    done <<< "$declared"
+    done
 
     if [[ ${#missing[@]} -gt 0 ]]; then
-        printf '\n%s: error: unsupported bootmode(s) in iso/profiledef.sh\n\n' \
-            "$SCRIPT_NAME" >&2
-        printf '  declared but unsupported: %s\n' "${missing[*]}" >&2
-        printf '\n  archiso %s actually supports:\n' "$ARCHISO_VERSION" >&2
-        printf '    %s\n' "${supported[@]}" >&2
-        printf '\n  Update bootmodes in iso/profiledef.sh to match, and record the\n' >&2
-        printf '  change in docs/ARCHITECTURE.md section 6 if the boot chain moves.\n\n' >&2
+        printf '\n%s: error: unsupported bootmode(s) in iso/profiledef.sh\n\n' "$SCRIPT_NAME" >&2
+        printf '  declared but unsupported : %s\n' "${missing[*]}" >&2
+        printf '  declared (all)           : %s\n' "${declared[*]}" >&2
+        printf '  supported by archiso %-4s: %s\n' "$ARCHISO_VERSION" "${supported[*]}" >&2
+        printf '  detected via             : %s\n' "$method" >&2
+        printf '\n  Update bootmodes in iso/profiledef.sh to values from the supported list.\n' >&2
+        printf '  Obelisk needs GRUB for UEFI so that grub-btrfs can publish snapshots as\n' >&2
+        printf '  boot entries (Phase 6); pick the GRUB-based UEFI mode, not systemd-boot.\n' >&2
+        printf '  If the boot chain has to change, record it in docs/ARCHITECTURE.md.\n\n' >&2
         exit 1
     fi
 
-    info "bootmodes verified against installed mkarchiso: ${declared//$'\n'/ }"
+    info "bootmodes verified: all declared modes are supported"
 }
 verify_bootmodes
 

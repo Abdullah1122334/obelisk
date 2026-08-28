@@ -25,6 +25,18 @@ die()  { printf '\n%s: error: %s\n\n' "$SCRIPT_NAME" "$1" >&2; exit "${2:-2}"; }
 info() { printf '[%s] %s\n' "$SCRIPT_NAME" "$1"; }
 warn() { printf '[%s] warning: %s\n' "$SCRIPT_NAME" "$1" >&2; }
 
+# Same rule as build-iso.sh: under `set -e` a bare non-zero return kills this script
+# silently. Nothing here is allowed to fail without saying where.
+on_err() {
+    local exit_code=$? line=$1 cmd=$2
+    printf '\n%s: FAILED\n' "$SCRIPT_NAME" >&2
+    printf '  exit code : %s\n' "$exit_code" >&2
+    printf '  line      : %s\n' "$line" >&2
+    printf '  command   : %s\n\n' "$cmd" >&2
+    exit "$exit_code"
+}
+trap 'on_err "$LINENO" "$BASH_COMMAND"' ERR
+
 usage() {
     cat <<'USAGE'
 Usage: ./scripts/test-qemu.sh [OPTIONS] [ISO]

@@ -60,6 +60,14 @@ bootstrap_tarball_compression=('zstd' '-c' '-T0' '--auto-threads=logical' '--lon
 # from the filesystem the build was launched from.
 #
 # Format: ["/path"]="UID:GID:MODE"
+#
+# declare -A is REQUIRED and is not decoration. Without it bash treats this as an
+# INDEXED array and evaluates ["/etc/shadow"] as an arithmetic expression, failing with
+# "syntax error: operand expected". mkarchiso happens to declare this associative in its
+# own scope before sourcing, so upstream profiles get away with omitting it — but that
+# makes this file unsourceable by anything else, including our own tooling and tests.
+# `bash -n` does NOT catch it: the file parses cleanly and only fails when executed.
+declare -A file_permissions
 file_permissions=(
   ["/etc/shadow"]="0:0:0400"
   ["/etc/gshadow"]="0:0:0400"

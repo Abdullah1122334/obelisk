@@ -59,6 +59,38 @@ jobs:
       # name of the upstream service Obelisk pins its mirror to, which we will reference
       # forever and must not rename. The Phase 2 version has to target user-visible
       # strings rather than any occurrence of the word.
+      # This step exists because CI run #3 died in 14 seconds with no message at all.
+      # The cause was that iso/profiledef.sh could not be sourced on its own:
+      # file_permissions is an associative array literal, and without a prior
+      # `declare -A` bash evaluates ["/etc/shadow"] as arithmetic and errors.
+      #
+      # `bash -n` does NOT catch this. It parses cleanly and only fails when executed,
+      # so syntax checking gave false confidence. Sourcing it for real is the only
+      # check that would have caught it, and it costs milliseconds.
+      - name: Execute iso/profiledef.sh and assert it declares a bootable profile
+        run: |
+          set -euo pipefail
+          # Sourced with NO pre-declaration on purpose. mkarchiso happens to declare
+          # file_permissions associative in its own scope before sourcing, so a profile
+          # missing `declare -A` still works for mkarchiso while being unsourceable by
+          # everything else -- which is exactly the trap that cost CI run #3. The first
+          # version of THIS check pre-declared the array too, and therefore passed
+          # against the known-broken file. It has to prove self-sufficiency.
+          out="$(
+            set -euo pipefail
+            . iso/profiledef.sh
+            echo "bootmodes=${bootmodes[*]:-}"
+            echo "file_permissions=${#file_permissions[@]}"
+            echo "iso_name=${iso_name:-}"
+            echo "install_dir=${install_dir:-}"
+          )"
+          echo "$out"
+          grep -q '^bootmodes=..*'   <<<"$out" || { echo "::error::profiledef.sh declares no bootmodes"; exit 1; }
+          grep -q '^iso_name=..*'    <<<"$out" || { echo "::error::profiledef.sh declares no iso_name"; exit 1; }
+          grep -q '^install_dir=..*' <<<"$out" || { echo "::error::profiledef.sh declares no install_dir"; exit 1; }
+          [ "$(sed -n 's/^file_permissions=//p' <<<"$out")" -gt 0 ] || { echo "::error::file_permissions is empty"; exit 1; }
+          echo "profiledef.sh executes and declares a usable profile"
+
       - name: Scan for Arch branding (warning during Phase 1)
         run: |
           set -uo pipefail

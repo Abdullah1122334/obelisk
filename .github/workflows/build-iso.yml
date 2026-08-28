@@ -32,9 +32,11 @@ jobs:
       # This runs before anything else on purpose. A CRLF that reaches Linux produces
       # "bad interpreter", which points at the interpreter instead of the real cause.
       - name: Check line endings and encoding
+        if: ${{ !cancelled() }}
         run: bash scripts/check-line-endings.sh
 
       - name: Install shellcheck
+        if: ${{ !cancelled() }}
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       # -x follows `source=` directives so ShellCheck can see that bootmodes and
@@ -46,6 +48,7 @@ jobs:
       # a disable would also hide a genuine unassigned variable in the same file, whereas
       # this keeps every real finding detectable.
       - name: Shellcheck
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           root="$(git rev-parse --show-toplevel)"
@@ -77,6 +80,7 @@ jobs:
       # so syntax checking gave false confidence. Sourcing it for real is the only
       # check that would have caught it, and it costs milliseconds.
       - name: Execute iso/profiledef.sh and assert it declares a bootable profile
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           # Sourced with NO pre-declaration on purpose. mkarchiso happens to declare
@@ -101,6 +105,7 @@ jobs:
           echo "profiledef.sh executes and declares a usable profile"
 
       - name: Scan for Arch branding (warning during Phase 1)
+        if: ${{ !cancelled() }}
         run: |
           set -uo pipefail
           matches="$(git ls-files 'iso/airootfs/**' | xargs -r grep -Hni 'arch linux' || true)"
@@ -137,8 +142,10 @@ jobs:
           AGENT_TOOLSDIRECTORY: /opt/hostedtoolcache
 
       # Reproducible ISO version and label: derived from the commit, not from the clock.
+      # Affects only reproducible ISO naming; profiledef.sh falls back to the current
+      # time when it is unset. Tolerant on purpose, so it cannot block a build.
       - name: Compute SOURCE_DATE_EPOCH
-        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct || true)" >> "$GITHUB_ENV"
 
       - name: Create config.env
         run: |
@@ -161,6 +168,7 @@ jobs:
       # repositories; the ISO CONTENTS come from the pinned Arch Linux Archive snapshot
       # configured in iso/pacman.conf. Those are deliberately two different things.
       - name: Build ISO in a privileged Arch container
+        id: build
         run: |
           set -euo pipefail
           docker run --rm --privileged \
@@ -176,6 +184,16 @@ jobs:
               # The required deps are listed too, so this line documents the whole build surface.
               pacman -Syu --noconfirm --needed \
                 archiso grub edk2-ovmf qemu-base arch-install-scripts dosfstools e2fsprogs erofs-utils libarchive libisoburn mtools squashfs-tools curl rsync
+              # mkarchiso runs as root and creates out/ and work/ owned by root. Every
+              # later step in this job is unprivileged, so without this they cannot even
+              # write out/iso-size.txt -- which is exactly what broke run #7.
+              #
+              # An EXIT trap rather than a trailing command: ownership must be restored
+              # even when the build fails, or the diagnostics upload cannot read what it
+              # is meant to collect. The uid:gid is taken from the mounted workspace
+              # rather than hard-coded, so it follows whatever user the runner uses.
+              _restore_owner() { chown -R "$(stat -c %u:%g /build)" /build/out /build/work 2>/dev/null || true; }
+              trap _restore_owner EXIT
               bash scripts/build-iso.sh --serial-console
             '
 
@@ -193,6 +211,12 @@ jobs:
       # docs/PERFORMANCE.md -- see the rule there about which numbers CI may publish.
       - name: Measure and record ISO size
         if: always()
+        # Pure bookkeeping. GitHub runs `run:` steps under `bash -e`, so a failing
+        # command here aborts the step; continue-on-error stops that from failing the
+        # job or skipping anything downstream. In run #7 this step could not write into
+        # a root-owned out/ and took the entire boot test down with it -- the real test,
+        # skipped by a step that only measures a file.
+        continue-on-error: true
         run: |
           set -uo pipefail
           iso="$(find out -maxdepth 1 -name "*.iso" -print -quit 2>/dev/null || true)"
@@ -213,7 +237,7 @@ jobs:
             echo "headroom_mib=$(( ceiling - mib ))"
             echo "commit=${GITHUB_SHA}"
             echo "archive_snapshot=${OBELISK_ARCHIVE_DATE:-unset}"
-          } | tee out/iso-size.txt
+          } | tee out/iso-size.txt || true
           {
             echo "## ISO size"
             echo ""
@@ -239,7 +263,11 @@ jobs:
           retention-days: 14
           compression-level: 0   # an ISO is already compressed; recompressing wastes time
 
+      # Gated on the BUILD step specifically, not on overall job status. Anything that
+      # is not mkarchiso -- measuring, uploading, summarising -- must be incapable of
+      # preventing the real test from running.
       - name: Boot the ISO under BIOS and UEFI
+        if: steps.build.outcome == 'success'
         run: |
           set -euo pipefail
           docker run --rm \
@@ -249,6 +277,8 @@ jobs:
               pacman -Syu --noconfirm --needed qemu-base edk2-ovmf
               # No /dev/kvm on GitHub-hosted runners: this is TCG emulation, so the
               # timeout is generous and the timings are NOT performance measurements.
+              _restore_owner() { chown -R "$(stat -c %u:%g /build)" /build/out 2>/dev/null || true; }
+              trap _restore_owner EXIT
               echo "--- accelerator availability on this runner ---"
               if [ -e /dev/kvm ]; then ls -l /dev/kvm; else echo "no /dev/kvm: TCG software emulation only"; fi
               bash scripts/test-qemu.sh --mode both --timeout 2400

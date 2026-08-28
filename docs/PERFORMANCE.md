@@ -38,12 +38,17 @@ artifact, so the number survives even when a later step fails.
 
 | Date | Commit | Phase | ISO size | Ceiling | Headroom | Notes |
 |---|---|---|---|---|---|---|
-| 2026-08-28 | run #6 | 1 | _not recorded_ | 3584 MiB | — | First successful build. The size was printed by `build-iso.sh` and by the `Report artifact size` step, but the run predates `out/iso-size.txt` and the figure was not captured here. Fill in from the run #6 log line `Size: N MiB`, or leave to be superseded by the next run, which records it automatically. |
+| 2026-08-28 | `042e6ab` (run #7) | 1 | **1002 MiB** (1050705920 bytes) | 3584 MiB | 2582 MiB | First recorded size. Text-console medium: base, `linux` and `linux-lts`, firmware, both boot loaders, filesystem tools, NetworkManager, Arabic locales. 28% of budget used. |
 
-The Phase 1 medium is a text-console system with no desktop: base, both kernels, firmware,
-boot loaders, filesystem tools, NetworkManager, and the Arabic locale set. It is expected
-to sit far below the ceiling. The number that matters arrives in Phase 2, when Plasma 6
-lands, and again in Phase 4 with Calamares.
+At 1002 MiB the Phase 1 medium uses 28% of the budget and leaves 2582 MiB of headroom.
+That is a comfortable starting position, but it is also the easy case: this medium has no
+desktop at all.
+
+The number that matters arrives in Phase 2, when Plasma 6 lands, and again in Phase 4 with
+Calamares. As a rough sighting shot, a KDE live medium from a comparable Arch derivative
+runs 2.2-2.4 GB, which would put us near 70% of the ceiling with the compatibility layer
+and the VM stack still deliberately off the image under decision D1. The headroom is real
+but it is not spare.
 
 ### Idle RAM
 

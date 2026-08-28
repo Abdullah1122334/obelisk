@@ -167,8 +167,15 @@ jobs:
             -v "${PWD}:/build" -w /build \
             -e SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
             archlinux:latest bash -euo pipefail -c '
+              # Complete and explicit, taken from the archiso 89 package metadata rather than
+              # discovered one failed build at a time. archiso pulls its REQUIRED deps in by
+              # itself; the ones that bite are its OPTIONAL deps, which pacman will not install:
+              #   grub      "for grub support in the ISO"  - the uefi.grub bootmode needs it,
+              #                                              which is what broke CI run #5
+              #   edk2-ovmf "for emulating UEFI"           - scripts/test-qemu.sh needs it
+              # The required deps are listed too, so this line documents the whole build surface.
               pacman -Syu --noconfirm --needed \
-                archiso qemu-base edk2-ovmf curl rsync
+                archiso grub edk2-ovmf qemu-base arch-install-scripts dosfstools e2fsprogs erofs-utils libarchive libisoburn mtools squashfs-tools curl rsync
               bash scripts/build-iso.sh
             '
 

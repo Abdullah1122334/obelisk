@@ -28,6 +28,26 @@ grub
 efibootmgr
 edk2-shell
 
+# --- memory diagnostics ----------------------------------------------------
+# The boot loader configuration inherited from releng references both of these, and
+# mkarchiso warns when a referenced entry has no package behind it.
+#
+# Adding them rather than deleting the entries, for two reasons. They cost 144 KiB
+# compressed in total (71927 + 71853 bytes), which is nothing against a 3.5 GB budget.
+# And Obelisk explicitly targets hardware Windows 11 rejects, where failing RAM is a
+# common and frequently misdiagnosed fault, so a memory tester on the medium earns its
+# place for this audience more than for most distributions.
+#
+# The alternative was surgery on inherited configuration files that Phase 2 deletes
+# anyway, which is fragile work with a short shelf life.
+#
+# OPEN DECISION for Phase 4: the boot menu specified for the product has exactly five
+# entries and memtest is not among them. Phase 4 owns the menu and must decide whether
+# memtest becomes a deliberate sixth entry or these two packages come back out. Recorded
+# in TODO-VERIFY.md so the choice is made rather than inherited.
+memtest86+
+memtest86+-efi
+
 # --- filesystems -----------------------------------------------------------
 # btrfs-progs is not optional: the whole unbreakability model in Phase 6 is Btrfs.
 btrfs-progs

@@ -50,6 +50,14 @@ merely believed.
       Minimal.
 - [ ] **(4) How Calamares consumes translations** — whether the `i18n/` generator must
       emit `.ts`/`.qm`, or can supply JSON directly.
+- [ ] **(4) Decide whether memtest keeps a boot menu entry.** `memtest86+` and
+      `memtest86+-efi` were added to `iso/packages.x86_64` in Phase 1 to clear the
+      mkarchiso warnings about boot entries with no package behind them, at a cost of
+      144 KiB compressed. The product boot menu specified for Obelisk has exactly five
+      entries and memtest is not one of them. Phase 4 owns the menu: either memtest
+      becomes a deliberate sixth entry, justified by the fact that Obelisk targets aging
+      hardware where failing RAM is common and often misdiagnosed, or both packages come
+      out. Do not let this be settled by inheritance.
 - [ ] **(4) Ventoy persistence plugin format**, and whether it works with an
       archiso-derived image without patching initramfs hooks.
 

@@ -141,9 +141,8 @@ command -v mkarchiso >/dev/null 2>&1 || die \
   If you are on Windows, this script cannot run here at all — that is by design.
   Use GitHub Actions, or an Arch VM. See docs/BUILDING-ON-WINDOWS.md."
 
-for tool in pacman rsync sed find du awk; do
-    command -v "$tool" >/dev/null 2>&1 || die "required tool not found in PATH: $tool"
-done
+# Host tool preflight is defined further down and runs after the bootmodes are known,
+# because some tools are required only by a specific bootmode.
 
 readonly RELENG_BASE="/usr/share/archiso/configs/releng"
 [[ -d "$RELENG_BASE" ]] || die \
@@ -268,6 +267,7 @@ verify_bootmodes() {
     # check passed while verifying nothing at all.
     mapfile -t declared < <(printf '%s
 ' "$declared_raw" | sed '/^[[:space:]]*$/d')
+    DECLARED_BOOTMODES=("${declared[@]}")
 
     if [[ ${#declared[@]} -eq 0 ]]; then
         die "iso/profiledef.sh sourced cleanly but declared no bootmodes.
@@ -319,7 +319,110 @@ verify_bootmodes() {
 
     info "bootmodes verified: all declared modes are supported"
 }
+declare -a DECLARED_BOOTMODES=()
 verify_bootmodes
+
+# ---------------------------------------------------------------------------
+# Host tool preflight
+# ---------------------------------------------------------------------------
+# Derived from the archiso 89 package metadata, not from adding one tool per failed
+# build. archiso's REQUIRED dependencies come in automatically with the package:
+#
+#   arch-install-scripts bash dosfstools e2fsprogs erofs-utils libarchive
+#   libisoburn mtools squashfs-tools
+#
+# The trap is archiso's OPTIONAL dependencies, which pacman does not install:
+#
+#   grub        "for grub support in the ISO"   <- mandatory for the uefi.grub bootmode
+#   edk2-ovmf   "for emulating UEFI"            <- needed by scripts/test-qemu.sh
+#   gnupg, openssl, qemu-desktop                <- PXE and run_archiso only, unused here
+#
+# CI run #5 failed on exactly that: mkarchiso validated the profile, accepted both
+# bootmodes, and then stopped because grub-install was absent. This check reports EVERY
+# missing tool in one pass so that class of failure costs one cycle, never several.
+check_host_tools() {
+    local -a missing=() rows=()
+    local entry binary package purpose mode
+
+    # binary|package|purpose  -- always required
+    rows=(
+        "pacstrap|arch-install-scripts|install packages into the ISO root filesystem"
+        "mksquashfs|squashfs-tools|build the squashfs airootfs image"
+        "xorriso|libisoburn|author the ISO9660 image"
+        "mmd|mtools|populate the FAT EFI system partition"
+        "mcopy|mtools|populate the FAT EFI system partition"
+        "mkfs.fat|dosfstools|create the FAT EFI system partition"
+        "mkfs.ext4|e2fsprogs|create intermediate filesystems"
+        "bsdtar|libarchive|unpack package payloads"
+        "pacman|pacman|resolve and fetch packages"
+        "rsync|rsync|overlay the Obelisk profile onto the build tree"
+        "awk|gawk|parse tool output"
+        "sed|sed|substitute build-time values"
+        "find|findutils|walk the profile tree"
+        "du|coreutils|measure the produced image"
+        "curl|curl|probe the pinned archive snapshot"
+    )
+
+    # Bootmode-specific tools. mkarchiso validates these itself, but it stops at the
+    # first one, so we check them up front and report them together.
+    for mode in "${DECLARED_BOOTMODES[@]}"; do
+        case "$mode" in
+            *grub*)
+                rows+=("grub-install|grub|required by the ${mode} bootmode")
+                rows+=("grub-mkstandalone|grub|required by the ${mode} bootmode")
+                ;;
+            *systemd-boot*)
+                rows+=("bootctl|systemd|required by the ${mode} bootmode")
+                ;;
+            *erofs*)
+                rows+=("mkfs.erofs|erofs-utils|required by the ${mode} image type")
+                ;;
+        esac
+    done
+
+    # The image tool depends on airootfs_image_type, which profiledef.sh sets.
+    if [[ "${OBELISK_IMAGE_TYPE:-squashfs}" == erofs ]]; then
+        rows+=("mkfs.erofs|erofs-utils|required by airootfs_image_type=erofs")
+    fi
+
+    for entry in "${rows[@]}"; do
+        IFS='|' read -r binary package purpose <<< "$entry"
+        command -v "$binary" >/dev/null 2>&1 || missing+=("${binary}|${package}|${purpose}")
+    done
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        info "host tool preflight: all ${#rows[@]} required tools present"
+        return 0
+    fi
+
+    local -a packages=()
+    printf '
+%s: error: %d required host tool(s) missing
+
+' "$SCRIPT_NAME" "${#missing[@]}" >&2
+    for entry in "${missing[@]}"; do
+        IFS='|' read -r binary package purpose <<< "$entry"
+        printf '  %-20s from %-22s %s
+' "$binary" "$package" "$purpose" >&2
+        packages+=("$package")
+    done
+    mapfile -t packages < <(printf '%s
+' "${packages[@]}" | sort -u)
+    printf '
+  Install all of them in one command:
+
+' >&2
+    printf '      pacman -S --needed %s
+
+' "${packages[*]}" >&2
+    printf '  Note that grub and edk2-ovmf are OPTIONAL dependencies of archiso, so
+' >&2
+    printf '  installing archiso alone does not pull them in.
+
+' >&2
+    exit 1
+}
+check_host_tools
 
 # ---------------------------------------------------------------------------
 # Assemble the build profile

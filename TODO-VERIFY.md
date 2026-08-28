@@ -74,6 +74,11 @@ merely believed.
       integration package are needed for a working panel indicator in Plasma 6.
 - [ ] **(9) Every hardened sysctl value against Wine, Steam, and Flatpak.** No value
       ships without a written justification and a test proving it broke none of them.
+- [ ] **(10) `softprops/action-gh-release@v3` input compatibility.** Bumped from v2 to v3
+      to clear the Node.js 20 deprecation. The `files`, `draft`, and
+      `generate_release_notes` inputs were assumed unchanged across the major version and
+      were not verified, because the release job only runs on `v*` tags and has therefore
+      never executed. Verify before cutting the first tagged release.
 - [ ] **(9) Arch Linux Archive rate limits and retention** for sustained use as our
       pinned mirror.
 

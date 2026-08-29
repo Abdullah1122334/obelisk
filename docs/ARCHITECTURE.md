@@ -131,6 +131,49 @@ firmware (BIOS or UEFI)
 
 On the live ISO the same GRUB serves the five-entry bilingual menu.
 
+## 6a. What we forked away from, and when
+
+Phase 1 inherited `efiboot/`, `syslinux/` and `grub/` from the installed releng profile
+at build time, so every upstream fix arrived automatically. **Phase 2 stops doing that.**
+The boot loader configuration is generated from `design/tokens.yaml` instead, because the
+inherited files carried Arch trademarks -- `MENU TITLE Arch Linux` and, more seriously,
+`splash.png`, a 45 KB image with the Arch logo and their registered tagline rendered into
+it. `docs/LEGAL.md` does not permit shipping those, and no text rebranding pass can edit
+a PNG.
+
+That is a real trade and it is worth naming plainly: **we have taken on maintenance debt.**
+Upstream boot fixes no longer reach us for free.
+
+**Forked at archiso 89.** The files below are now ours. When archiso is upgraded, diff
+these against the new releng profile before assuming nothing changed.
+
+| Inherited until Phase 2 | Now | Why it had to become ours |
+|---|---|---|
+| `syslinux/syslinux.cfg` | generated | dispatch between PXE and ISO boot |
+| `syslinux/archiso_head.cfg` | generated from tokens | held `MENU TITLE Arch Linux`, `MENU BACKGROUND splash.png`, and the menu colour scheme |
+| `syslinux/archiso_sys.cfg` | generated | include order, `DEFAULT`, `TIMEOUT` |
+| `syslinux/archiso_sys-linux.cfg` | generated | the kernel command lines |
+| `syslinux/archiso_tail.cfg` | generated | chain-boot, memtest, HDT, reboot, poweroff entries |
+| `syslinux/splash.png` | **deleted, replaced from `design/`** | Arch logo and registered tagline |
+| `grub/grub.cfg` | generated from tokens | menu entries and theming |
+| `efiboot/` | generated | UEFI boot artefacts |
+
+**What we lose by owning them.** Upstream changes to boot parameters, new hooks, syslinux
+module renames, and fixes for firmware quirks. Anything archiso learns about booting on
+awkward hardware, we now have to learn separately.
+
+**How the debt is serviced.** `scripts/build-iso.sh` records the archiso version it built
+with in `out/profile-manifest.txt`. On every archiso major version bump, the maintainer
+diffs `/usr/share/archiso/configs/releng/` against the generator's output and decides
+deliberately what to adopt. This is written into the release checklist in
+`docs/RELEASING.md` rather than left to memory, and tracked in `TODO-VERIFY.md`.
+
+The alternative -- keeping the inheritance and stripping trademarks afterwards -- was
+rejected. It failed once already: the Phase 1 rebranding pass matched `Arch Linux` and
+`archlinux` but not the tagline, and could not touch the PNG at all. A subtractive
+approach to trademark removal fails open, and for a legal control that is the wrong
+default.
+
 ## 7. Package and repository architecture
 
 Because Calamares is AUR-only (section 3), Obelisk needs its own binary repository before

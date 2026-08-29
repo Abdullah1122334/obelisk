@@ -136,6 +136,25 @@ jobs:
           [ "$(sed -n 's/^file_permissions=//p' <<<"$out")" -gt 0 ] || { echo "::error::file_permissions is empty"; exit 1; }
           echo "profiledef.sh executes and declares a usable profile"
 
+      # design/tokens.yaml is the single source of truth for the look. This runs both of
+      # its policies -- WCAG contrast for every role pair, and the affordance/identity
+      # separation from design/brand-guidelines.md -- and fails on either. It also proves
+      # docs/DESIGN-CONTRAST.md is not stale: a committed report that no longer matches
+      # the tokens is worse than none, because it is believed.
+      - name: "Design tokens: policies and generated report"
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq python3-yaml </dev/null
+          python3 design/generate.py
+          if ! git diff --quiet -- docs/DESIGN-CONTRAST.md; then
+            echo "::error::docs/DESIGN-CONTRAST.md is out of date. Run design/generate.py and commit the result."
+            git --no-pager diff -- docs/DESIGN-CONTRAST.md
+            exit 1
+          fi
+          echo "design report is current"
+
       - name: Scan for Arch branding (warning during Phase 1)
         timeout-minutes: 5
         if: ${{ !cancelled() }}

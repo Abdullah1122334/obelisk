@@ -29,24 +29,19 @@ efibootmgr
 edk2-shell
 
 # --- memory diagnostics ----------------------------------------------------
-# The boot loader configuration inherited from releng references both of these, and
-# mkarchiso warns when a referenced entry has no package behind it.
+# DELIBERATELY ABSENT. Resolved in Phase 2 rather than left open to Phase 4.
 #
-# Adding them rather than deleting the entries, for two reasons. They cost 144 KiB
-# compressed in total (71927 + 71853 bytes), which is nothing against a 3.5 GB budget.
-# And Obelisk explicitly targets hardware Windows 11 rejects, where failing RAM is a
-# common and frequently misdiagnosed fault, so a memory tester on the medium earns its
-# place for this audience more than for most distributions.
+# The memtest boot entry came from releng's archiso_tail.cfg, which Obelisk no longer
+# inherits: the boot menu is generated from design/tokens.yaml and contains exactly what
+# we author. memtest86+ installs a kernel image at /boot/memtest86+/memtest that is only
+# ever reachable from a boot loader entry, so with no entry the packages would ship
+# 144 KiB that nothing on the medium can launch.
 #
-# The alternative was surgery on inherited configuration files that Phase 2 deletes
-# anyway, which is fragile work with a short shelf life.
-#
-# OPEN DECISION for Phase 4: the boot menu specified for the product has exactly five
-# entries and memtest is not among them. Phase 4 owns the menu and must decide whether
-# memtest becomes a deliberate sixth entry or these two packages come back out. Recorded
-# in TODO-VERIFY.md so the choice is made rather than inherited.
-memtest86+
-memtest86+-efi
+# Shipping a package nothing can start is worse than not shipping it. If Phase 4 decides
+# a diagnostics entry earns a place in the five-entry live menu -- a fair argument, since
+# Obelisk targets aging hardware where failing RAM is common and misdiagnosed -- the
+# packages return together with the entry, not before it.
+
 
 # --- filesystems -----------------------------------------------------------
 # btrfs-progs is not optional: the whole unbreakability model in Phase 6 is Btrfs.

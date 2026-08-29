@@ -101,12 +101,51 @@ in the palette.
 | Body text, surfaces, borders | granite | either accent |
 | Secondary action, used sparingly | patina | more than once per screen |
 
+## The rule as machine-checkable policy
+
+The prose above is the reasoning. This is the part a tool reads, and the part that
+survives someone building a screen in a hurry at the end of a long day. `generate.py`
+fails the build on a violation; it is not advisory.
+
+**Interactive roles.** These name something the user can act on. They may resolve only to
+`lapis`, `patina`, `granite`, or a semantic colour:
+
+```
+primary  on_primary  selection_bg  selection_fg  secondary
+```
+
+**Identity and framing roles.** These may resolve to `electrum`. Nothing in this list is
+clickable:
+
+```
+accent  accent_solid  on_accent  focus_ring
+```
+
+**The two lists are disjoint and the check is symmetric.** An interactive role resolving
+to an electrum token fails. An identity role resolving to a lapis token also fails --
+gold drifting onto buttons and blue drifting onto the logo are the same mistake in
+opposite directions, and only checking one of them would let the palette rot from the
+other side.
+
+`accent_solid` is the single case that needs care: it is a solid electrum fill used for
+brand moments, and `on_accent` is the text that sits on it. That pairing is permitted
+precisely because neither is an affordance. If a button ever needs a gold fill, the
+correct answer is that it does not: use `primary`.
+
+Adding a role means deciding which list it belongs to. A role in neither list fails the
+check rather than defaulting to permitted, because a new role nobody classified is
+exactly where the rule erodes first.
+
 ## Enforcement
 
 `design/generate.py` computes every foreground/background pair from `tokens.yaml` and
 writes the ratios to `docs/DESIGN-CONTRAST.md` on every run. CI fails when a non-exempt
 pair drops below its requirement.
 
-Contrast is necessary but not sufficient: the rule above exists precisely because a
-palette can pass every ratio and still be incoherent. Reviewers should check the rule
-by eye, and any deliberate exception must be written down here with its reasoning.
+`generate.py` additionally enforces the role policy above and fails on a violation, so
+the separation between affordance and identity is checked rather than trusted.
+
+Contrast is necessary but not sufficient, and so is the role check: a palette can pass
+every ratio and every rule and still be incoherent. Reviewers should look at the result.
+Any deliberate exception must be written down here with its reasoning, never left as a
+local override in a generated file.

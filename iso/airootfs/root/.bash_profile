@@ -27,4 +27,6 @@
     printf 'OBELISK_BOOT_MARKER_END\n'
 } > /dev/ttyS0 2>/dev/null || true
 
-[[ -f /etc/motd ]] && cat /etc/motd
+# /etc/motd is deliberately NOT printed here. agetty --autologin hands off to
+# login(1), whose PAM stack already prints it before the shell starts, so doing it
+# again produced the banner twice on the live console.

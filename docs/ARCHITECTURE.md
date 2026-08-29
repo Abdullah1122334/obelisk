@@ -156,7 +156,7 @@ these against the new releng profile before assuming nothing changed.
 | `syslinux/archiso_tail.cfg` | generated | chain-boot, memtest, HDT, reboot, poweroff entries |
 | `syslinux/splash.png` | **deleted, replaced from `design/`** | Arch logo and registered tagline |
 | `grub/grub.cfg` | generated from tokens | menu entries and theming |
-| `efiboot/` | generated | UEFI boot artefacts |
+| `efiboot/` | **not used** | archiso documents `efiboot/` as mandatory only for the `uefi.systemd-boot` bootmode. Obelisk declares `uefi.grub`, so it was inherited in Phase 1 and never consumed. Dropped rather than generated. |
 
 **What we lose by owning them.** Upstream changes to boot parameters, new hooks, syslinux
 module renames, and fixes for firmware quirks. Anything archiso learns about booting on
@@ -173,6 +173,31 @@ rejected. It failed once already: the Phase 1 rebranding pass matched `Arch Linu
 `archlinux` but not the tagline, and could not touch the PNG at all. A subtractive
 approach to trademark removal fails open, and for a legal control that is the wrong
 default.
+
+### Secure Boot: what the fork changed
+
+**Nothing.** Recorded here before Phase 4 rather than discovered during install testing.
+
+The official Arch installation image has not supported Secure Boot since
+`archlinux-2016.06.01-dual.iso`, when prebootloader was replaced with efitools and the
+signed path was dropped. The image contains no shim, no signed boot loader, and no MOK
+infrastructure. Secure Boot is not mentioned anywhere in archiso's profile documentation.
+
+So there was nothing to inherit and nothing has been lost. Obelisk's position is what it
+already was: Secure Boot must be turned off to boot the medium, or the user enrols their
+own keys.
+
+Two consequences worth having on the record:
+
+- **The fork slightly helps rather than hurts here.** Obelisk boots UEFI through GRUB,
+  not systemd-boot, and GRUB plus shim is the well-trodden path that other distributions
+  already sign. Owning the boot configuration means a future signed chain is a change we
+  can make, rather than one we would have to fight the inherited profile to make.
+- **The installed system and the medium are separate problems.** Phase 4 targets MOK
+  enrolment via `sbctl` for the *installed* system. Making the *medium* itself bootable
+  under Secure Boot needs a signed shim, which needs either a Microsoft signing
+  submission or the user enrolling a key before first boot. That remains out of scope
+  until the project has a stable identity, as section 10 already states.
 
 ## 7. Package and repository architecture
 

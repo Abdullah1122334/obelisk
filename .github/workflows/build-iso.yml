@@ -169,6 +169,51 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------
+  # Investigation: read the theme file formats out of the installed packages.
+  # ---------------------------------------------------------------------------
+  # Not a gate on the build. design/generate.py has to emit five theme formats that have
+  # all changed across major versions, and whose tutorials are mostly written against
+  # Plasma 5. This reads each one out of a working reference implementation -- breeze,
+  # breeze-grub, breeze-plymouth, plasma-workspace, sddm -- instead of guessing.
+  #
+  # It runs in parallel with the build and blocks nothing, because it answers questions
+  # rather than enforcing anything. It fails only when a question could NOT be answered,
+  # which is itself the signal: do not write a generator for a format nobody has read.
+  verify-formats:
+    name: verify theme file formats
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read formats from installed packages
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          docker run --rm -v "${PWD}:/build" -w /build             archlinux:latest bash scripts/verify-theme-formats.sh </dev/null
+
+      - name: Publish the report to the run summary
+        if: always()
+        run: |
+          set -uo pipefail
+          if [ -f out/theme-formats.md ]; then
+            cat out/theme-formats.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### theme format report was not produced" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the report
+        if: always()
+        timeout-minutes: 10
+        uses: actions/upload-artifact@v7
+        with:
+          name: obelisk-theme-formats
+          path: out/theme-formats.md
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
   # Gate 2: build the ISO and prove it boots.
   # ---------------------------------------------------------------------------
   build:

@@ -61,6 +61,24 @@ merely believed.
 - [ ] **(4) Ventoy persistence plugin format**, and whether it works with an
       archiso-derived image without patching initramfs hooks.
 
+## Open from CI run #8
+
+- [ ] **(1) Confirm the initramfs was the whole cause.** Two defects were found and fixed
+      without the serial log: no mkinitcpio configuration at all, so the archiso hook was
+      never used; and `console=tty0` listed last, which made VGA rather than serial the
+      userspace console and hid every message after the kernel handed off. The first
+      explains a death at ~1.1s; the second explains why it was silent. What is NOT yet
+      confirmed is that there is no third problem behind them. The next run answers it.
+- [ ] **(3) Trim the PXE initramfs hooks.** `archiso_pxe_common`, `archiso_pxe_nbd`,
+      `archiso_pxe_http` and `archiso_pxe_nfs` are kept only because they are upstream
+      defaults, and Obelisk builds `buildmodes=('iso')` with no netboot. Removing them
+      shrinks the initramfs, but it is a change to a boot path and belongs in a phase
+      that measures, not in one that is diagnosing a boot failure.
+- [ ] **(3) Decide whether `linux-lts` belongs on the live medium.** It is required as an
+      installed-system GRUB fallback, but the live medium never boots it, and it carries
+      a second kernel plus its own initramfs. Measure the cost before Phase 4 fills the
+      remaining budget.
+
 ## Later phases
 
 - [ ] **(3) squashfs `xz` versus `zstd`:** measure ISO size against boot time and decide

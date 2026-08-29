@@ -292,6 +292,7 @@ jobs:
           path: |
             out/profile-manifest.txt
             out/iso-size.txt
+            out/kernel-cmdline.txt
             out/qemu/
 
           if-no-files-found: warn

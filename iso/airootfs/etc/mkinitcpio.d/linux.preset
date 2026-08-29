@@ -1,0 +1,15 @@
+# mkinitcpio preset for the Obelisk live medium.
+#
+# Binds the kernel to the archiso initramfs configuration next door. Without the preset,
+# mkinitcpio builds a stock initramfs and ignores mkinitcpio.conf.d/archiso.conf
+# entirely, so the hooks above would be present on disk and unused.
+#
+# Only 'linux' has an archiso preset, matching upstream. linux-lts ships on the medium
+# for the installed system's GRUB fallback and is not a live boot target, so it keeps its
+# own packaged preset.
+PRESETS=('archiso')
+
+ALL_kver="/boot/vmlinuz-linux"
+
+archiso_config="/etc/mkinitcpio.conf.d/archiso.conf"
+archiso_image="/boot/initramfs-linux.img"

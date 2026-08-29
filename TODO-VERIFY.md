@@ -63,12 +63,15 @@ merely believed.
 
 ## Open from CI run #8
 
-- [ ] **(1) Confirm the initramfs was the whole cause.** Two defects were found and fixed
-      without the serial log: no mkinitcpio configuration at all, so the archiso hook was
-      never used; and `console=tty0` listed last, which made VGA rather than serial the
-      userspace console and hid every message after the kernel handed off. The first
-      explains a death at ~1.1s; the second explains why it was silent. What is NOT yet
-      confirmed is that there is no third problem behind them. The next run answers it.
+- [x] **(1) The initramfs fix worked.** Confirmed by CI run #10: the medium booted all
+      the way through the initramfs into userspace and reached `systemd-firstboot`. The
+      remaining failure was a different problem entirely -- an interactive timezone
+      prompt -- not a boot failure. The console-ordering fix is what made it visible.
+- [ ] **(1) Confirm nothing else prompts or blocks after firstboot.** Two defects were found and fixed
+      `systemd.firstboot=off` stops the known prompt, and the audit covered host-side
+      commands, but the guest side was only understood after run #10. Anything else in
+      the live boot that waits on `/dev/console` would look identical. The next run
+      answers it.
 - [ ] **(3) Trim the PXE initramfs hooks.** `archiso_pxe_common`, `archiso_pxe_nbd`,
       `archiso_pxe_http` and `archiso_pxe_nfs` are kept only because they are upstream
       defaults, and Obelisk builds `buildmodes=('iso')` with no netboot. Removing them

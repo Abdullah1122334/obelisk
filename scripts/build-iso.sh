@@ -565,6 +565,158 @@ verify_initramfs_config() {
 verify_initramfs_config
 
 # ---------------------------------------------------------------------------
+# Kernel command line
+# ---------------------------------------------------------------------------
+# archiso puts the kernel command line on the lines carrying archisobasedir=, in both
+# the syslinux and GRUB configurations, so one targeted edit covers every entry and
+# every firmware.
+append_kernel_cmdline() {
+    local params="$1" purpose="$2"
+    local injected=0 cfg
+
+    while IFS= read -r -d '' cfg; do
+        if grep -q 'archisobasedir=' "$cfg"; then
+            sed -i "/archisobasedir=/ s|\$| ${params}|" -- "$cfg"
+            injected=$((injected + 1))
+        fi
+    done < <(find "$PROFILE_DIR" -type f \( -name '*.cfg' -o -name '*.conf' \) -print0)
+
+    if [[ $injected -eq 0 ]]; then
+        die "no kernel command line found while trying to add: ${params}
+
+  Searched every .cfg and .conf under ${PROFILE_DIR} for a line containing
+  archisobasedir=, which is where archiso puts the kernel command line. Finding none
+  means the inherited boot loader configuration is not shaped as expected. Refusing to
+  build a medium whose boot parameters are not what this script believes they are."
+    fi
+    info "kernel cmdline += ${params}  (${injected} file(s): ${purpose})"
+}
+
+# UNCONDITIONAL. systemd-firstboot runs when ConditionFirstBoot is met, which for a
+# freshly built live medium it always is, and interactively asks for locale, keymap,
+# timezone, hostname, root password and root shell. It skips whatever is already
+# configured -- which is why CI run #10 got exactly one question:
+#
+#     Please enter the new timezone name or number ("list" to list)
+#
+# repeated from 1855s to 2395s. We ship /etc/hostname and /etc/locale.conf, so those
+# were satisfied; we ship no /etc/localtime, so it asked, on a console with no input,
+# forever. The boot itself was fine -- the initramfs fix in the previous commit worked
+# and the system reached userspace.
+#
+# Fixed with the documented kernel parameter rather than by shipping /etc/localtime as a
+# symlink: symlinks do not survive a Windows checkout reliably, and a live medium should
+# never interrogate the user at boot regardless of which files happen to be present.
+append_kernel_cmdline "systemd.firstboot=off"     "a live medium must never stop to ask the user a question"
+
+# Optional: make the boot observable over a serial port.
+#
+# Without this the kernel logs only to the VGA console, so a headless QEMU run produces
+# an EMPTY serial log until /root/.bash_profile writes the completion marker.
+#
+# ORDER MATTERS. The LAST console= becomes /dev/console, which is where USERSPACE writes
+# -- the initramfs, an emergency shell, a panic, and as run #10 showed, an interactive
+# prompt. Kernel printk goes to every listed console, userspace only to the last. ttyS0
+# goes last so serial is /dev/console; tty0 stays listed so a human at the machine still
+# sees the kernel log.
+#
+# Off by default: a released medium should not advertise a serial console it may not have.
+if [[ "$SERIAL_CONSOLE" == 1 ]]; then
+    append_kernel_cmdline "console=tty0 console=ttyS0,115200"         "make the boot observable to scripts/test-qemu.sh"
+else
+    info "serial console not requested (pass --serial-console to make the boot observable)"
+fi
+
+# Record the final command lines as a build artifact. "Is the cmdline what we think it
+# is" should be answerable by reading a file, not by inference from a silent boot.
+{
+    echo "# Kernel command lines in the assembled profile"
+    echo "# archiso substitutes the percent-delimited tokens at build time."
+    echo ""
+    grep -rn 'archisobasedir=' "$PROFILE_DIR" || true
+} > "${OUT_DIR}/kernel-cmdline.txt"
+info "kernel command lines recorded in ${OUT_DIR}/kernel-cmdline.txt"
+
+# Every entry must carry the firstboot guard. A single entry without it is a boot that
+# stops and waits for a human who is not there.
+declare -a missing_guard=()
+while IFS= read -r cfg; do
+    if grep 'archisobasedir=' "$cfg" | grep -qv 'systemd.firstboot=off'; then
+        missing_guard+=("$cfg")
+    fi
+done < <(grep -rl 'archisobasedir=' "$PROFILE_DIR" || true)
+if [[ ${#missing_guard[@]} -gt 0 ]]; then
+    die "some boot entries lack systemd.firstboot=off:
+${missing_guard[*]}"
+fi
+info "all boot entries carry systemd.firstboot=off"
+
+# ---------------------------------------------------------------------------
+# The medium must be able to build a bootable initramfs
+# ---------------------------------------------------------------------------
+# CI run #8 produced a perfectly valid 1002 MiB ISO that died at 1.1 seconds of kernel
+# time, because mkinitcpio-archiso was installed but nothing told mkinitcpio to USE the
+# archiso hook. The package only provides the hook; a HOOKS array has to name it.
+#
+# That cost a full build-and-test cycle to discover, and the symptom pointed nowhere
+# near the cause. This check makes an unbootable-by-construction medium fail in seconds
+# instead, before a single package is downloaded.
+verify_initramfs_config() {
+    local conf_dir="${PROFILE_DIR}/airootfs/etc/mkinitcpio.conf.d"
+    local preset="${PROFILE_DIR}/airootfs/etc/mkinitcpio.d/linux.preset"
+    local -a confs=()
+    local hooks_line="" conf
+
+    mapfile -t confs < <(find "$conf_dir" -maxdepth 1 -name '*.conf' -type f 2>/dev/null | sort)
+
+    if [[ ${#confs[@]} -eq 0 ]]; then
+        die "no mkinitcpio configuration in the assembled profile.
+
+  Expected at least one .conf under:
+      airootfs/etc/mkinitcpio.conf.d/
+
+  Without it mkinitcpio builds a stock initramfs with no archiso hook. The medium then
+  boots, fails to find a root it understands, and dies about one second into the kernel
+  with no useful message. Installing mkinitcpio-archiso is not enough on its own: the
+  package provides the hook, a HOOKS array has to name it." 1
+    fi
+
+    for conf in "${confs[@]}"; do
+        if grep -qE '^[[:space:]]*HOOKS=' "$conf"; then
+            hooks_line="$(grep -E '^[[:space:]]*HOOKS=' "$conf" | tail -n1)"
+            break
+        fi
+    done
+
+    [[ -n "$hooks_line" ]] || die "mkinitcpio configuration present but no HOOKS array is set.
+
+  Searched: ${confs[*]}" 1
+
+    if [[ "$hooks_line" != *archiso* ]]; then
+        die "the initramfs HOOKS array does not include the archiso hook.
+
+  found: ${hooks_line}
+
+  The archiso hook is what teaches the initramfs to find the medium by label and mount
+  the squashfs. Without it the medium cannot boot, whatever else is correct." 1
+    fi
+
+    [[ -f "$preset" ]] || die "no mkinitcpio preset at airootfs/etc/mkinitcpio.d/linux.preset.
+
+  Without the preset, mkinitcpio ignores mkinitcpio.conf.d/archiso.conf entirely and
+  builds a stock initramfs anyway -- the hooks would be present on disk and unused,
+  which looks correct in review and fails identically at boot." 1
+
+    grep -q 'archiso' "$preset" || die "the mkinitcpio preset does not reference the archiso configuration.
+
+  ${preset} must set PRESETS=('archiso') and point archiso_config at the file in
+  mkinitcpio.conf.d." 1
+
+    info "initramfs configuration verified: archiso hook present, preset binds it"
+}
+verify_initramfs_config
+
+# ---------------------------------------------------------------------------
 # Optional: make the boot observable over a serial port
 # ---------------------------------------------------------------------------
 # Without this the kernel logs only to the VGA console, so a headless QEMU run produces

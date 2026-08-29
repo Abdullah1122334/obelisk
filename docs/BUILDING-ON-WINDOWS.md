@@ -179,7 +179,7 @@ stick and it supports the persistence layout Obelisk targets in Phase 4.
 |---|---|
 | Build the ISO | Push, or `gh workflow run build-iso.yml` |
 | Build a package | Phase 2's `repo/build-packages.sh` runs in CI, same as the ISO |
-| Run `shellcheck` | CI runs it on every push. Locally, from Git Bash at the repository root, use the same flags CI does, or you will see false positives CI does not: `shellcheck -x -P "$(git rev-parse --show-toplevel)" --severity=warning $(git ls-files "*.sh")` |
+| Run `shellcheck` | CI runs it on every push, pinned to **shellcheck v0.11.0** so local and CI results agree. Use the same version and the same flags, from Git Bash at the repository root: `shellcheck -x -P "$(git rev-parse --show-toplevel)" --severity=warning $(git ls-files "*.sh")` |
 | Inspect the built root filesystem | Download the diagnostics artifact, or use an Arch VM |
 | Iterate quickly on `airootfs` | An Arch VM is a genuine accelerator here — but never a requirement |
 

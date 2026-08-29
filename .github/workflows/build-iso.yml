@@ -38,12 +38,35 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/check-line-endings.sh
 
+      # PINNED, not the distro default. CI run #11 failed on an SC2218 that the local
+      # shellcheck did not report: the two versions disagreed about a duplicated function
+      # definition, which meant "verified locally before pushing" had quietly stopped
+      # guaranteeing anything. Both sides now run the same binary, and the version is
+      # printed so a future divergence is visible in the log rather than inferred from a
+      # surprise failure.
       - name: Install shellcheck
-        timeout-minutes: 5
         if: ${{ !cancelled() }}
+        timeout-minutes: 5
         env:
-          DEBIAN_FRONTEND: noninteractive
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck </dev/null
+          SHELLCHECK_VERSION: v0.11.0
+        run: |
+          set -euo pipefail
+          url="https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL "$url" | tar -xJ --strip-components=1 -C "$HOME/.local/bin" "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          chmod +x "$HOME/.local/bin/shellcheck"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/shellcheck" --version
+
+      # Deterministic, unlike the accident that exposed this. Run #11 was caught only
+      # because CI and the maintainer had different shellcheck builds; 0.11.0 reports
+      # nothing for a duplicated function even when SC2218 is requested by name. Now that
+      # both sides run the same pinned binary, that accident cannot repeat, so the defect
+      # it happened to reveal is checked for on purpose instead.
+      - name: No duplicate function definitions
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/check-duplicate-functions.sh
 
       # -x follows `source=` directives so ShellCheck can see that bootmodes and
       # file_permissions are assigned by iso/profiledef.sh. -P anchors the search path
@@ -60,6 +83,7 @@ jobs:
           set -euo pipefail
           root="$(git rev-parse --show-toplevel)"
           mapfile -t files < <(git ls-files "*.sh")
+          shellcheck --version | grep version
           echo "checking ${#files[@]} shell script(s) with external sources enabled"
           shellcheck -x -P "$root" --severity=warning "${files[@]}"
 

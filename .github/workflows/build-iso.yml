@@ -26,18 +26,24 @@ jobs:
   lint:
     name: line endings and shell lint
     runs-on: ubuntu-latest
+    # Observed: 11s. Anything approaching this cap is a hang, not slow linting.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
       # This runs before anything else on purpose. A CRLF that reaches Linux produces
       # "bad interpreter", which points at the interpreter instead of the real cause.
       - name: Check line endings and encoding
+        timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: bash scripts/check-line-endings.sh
 
       - name: Install shellcheck
+        timeout-minutes: 5
         if: ${{ !cancelled() }}
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck </dev/null
 
       # -x follows `source=` directives so ShellCheck can see that bootmodes and
       # file_permissions are assigned by iso/profiledef.sh. -P anchors the search path
@@ -48,6 +54,7 @@ jobs:
       # a disable would also hide a genuine unassigned variable in the same file, whereas
       # this keeps every real finding detectable.
       - name: Shellcheck
+        timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
@@ -80,6 +87,7 @@ jobs:
       # so syntax checking gave false confidence. Sourcing it for real is the only
       # check that would have caught it, and it costs milliseconds.
       - name: Execute iso/profiledef.sh and assert it declares a bootable profile
+        timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
@@ -105,6 +113,7 @@ jobs:
           echo "profiledef.sh executes and declares a usable profile"
 
       - name: Scan for Arch branding (warning during Phase 1)
+        timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: |
           set -uo pipefail
@@ -123,7 +132,19 @@ jobs:
     name: build ISO and boot it
     needs: lint
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Budget, from measurements rather than guesswork:
+    #   pacman in the container      ~5m
+    #   mkarchiso                    ~5m   (run #8 measured 5m10s)
+    #   ISO upload, ~1 GB            ~5m
+    #   boot test, 2 x 20m cap      ~40m
+    #                               -----
+    #                                55m, so 75 gives sane headroom without
+    #                                letting a hang burn two hours again.
+    #
+    # Run #9 hung for 2h06m under the previous 120m cap. A cap that generous is not a
+    # guardrail. Step-level timeouts below narrow it further, so a hang names itself
+    # instead of only failing the job.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
 
@@ -131,6 +152,7 @@ jobs:
       # the HOST before starting the container, which is why this workflow runs docker
       # by hand instead of using the job-level `container:` key.
       - name: Free disk space
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           echo "before:"; df -h /
@@ -168,9 +190,12 @@ jobs:
       # repositories; the ISO CONTENTS come from the pinned Arch Linux Archive snapshot
       # configured in iso/pacman.conf. Those are deliberately two different things.
       - name: Build ISO in a privileged Arch container
+        timeout-minutes: 30
         id: build
         run: |
           set -euo pipefail
+          # stdin closed: any command that decides to prompt gets EOF and fails fast,
+          # instead of waiting forever on a terminal that does not exist.
           docker run --rm --privileged \
             -v "${PWD}:/build" -w /build \
             -e SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
@@ -195,7 +220,7 @@ jobs:
               _restore_owner() { chown -R "$(stat -c %u:%g /build)" /build/out /build/work 2>/dev/null || true; }
               trap _restore_owner EXIT
               bash scripts/build-iso.sh --serial-console
-            '
+            ' </dev/null
 
       # Uploaded here, directly after mkarchiso and BEFORE the boot test, with
       # if: always(). The ISO is the expensive output of this workflow -- roughly
@@ -210,6 +235,7 @@ jobs:
       # through logs, and survives a failing boot test. Recorded per release in
       # docs/PERFORMANCE.md -- see the rule there about which numbers CI may publish.
       - name: Measure and record ISO size
+        timeout-minutes: 5
         if: always()
         # Pure bookkeeping. GitHub runs `run:` steps under `bash -e`, so a failing
         # command here aborts the step; continue-on-error stops that from failing the
@@ -251,6 +277,7 @@ jobs:
           ls -lh out/*.iso
           df -h /
       - name: Upload ISO
+        timeout-minutes: 20
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -267,6 +294,7 @@ jobs:
       # is not mkarchiso -- measuring, uploading, summarising -- must be incapable of
       # preventing the real test from running.
       - name: Boot the ISO under BIOS and UEFI
+        timeout-minutes: 50
         if: steps.build.outcome == 'success'
         run: |
           set -euo pipefail
@@ -281,10 +309,11 @@ jobs:
               trap _restore_owner EXIT
               echo "--- accelerator availability on this runner ---"
               if [ -e /dev/kvm ]; then ls -l /dev/kvm; else echo "no /dev/kvm: TCG software emulation only"; fi
-              bash scripts/test-qemu.sh --mode both --timeout 2400
-            '
+              bash scripts/test-qemu.sh --mode both --timeout 1200
+            ' </dev/null
 
       - name: Upload build diagnostics
+        timeout-minutes: 10
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -306,6 +335,7 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:

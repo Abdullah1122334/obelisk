@@ -133,6 +133,33 @@ find_ovmf() {
     return 1
 }
 
+# OVMF needs a WRITABLE variable store as a second pflash unit. Attaching only the
+# read-only CODE image, as this script first did, leaves the firmware unable to persist
+# a boot variable. It commonly then falls through to the EDK2 shell or the setup menu
+# and WAITS FOR A KEYPRESS -- on the VGA console, invisible over serial. That is an
+# unbounded interactive wait inside an automated test, and a prime suspect for the two
+# hour hang in CI run #9.
+#
+# Paths confirmed against the Arch edk2-ovmf file list.
+find_ovmf_vars() {
+    local code="$1" guess
+    # Same directory, same generation: OVMF_CODE.4m.fd -> OVMF_VARS.4m.fd
+    guess="${code/OVMF_CODE/OVMF_VARS}"
+    [[ -f "$guess" ]] && { printf '%s' "$guess"; return 0; }
+    local candidates=(
+        /usr/share/edk2/x64/OVMF_VARS.4m.fd
+        /usr/share/edk2/x64/OVMF_VARS.fd
+        /usr/share/edk2-ovmf/x64/OVMF_VARS.fd
+        /usr/share/OVMF/OVMF_VARS_4M.fd
+        /usr/share/OVMF/OVMF_VARS.fd
+    )
+    local c
+    for c in "${candidates[@]}"; do
+        [[ -f "$c" ]] && { printf '%s' "$c"; return 0; }
+    done
+    return 1
+}
+
 # ---------------------------------------------------------------------------
 # One boot attempt
 # ---------------------------------------------------------------------------
@@ -176,8 +203,25 @@ boot_once() {
             warn "install edk2-ovmf, or pass --ovmf PATH."
             return 3
         fi
+        local vars_src vars_copy
+        if ! vars_src="$(find_ovmf_vars "$ovmf")"; then
+            warn "found OVMF code at ${ovmf} but no matching VARS image."
+            warn "without a writable variable store the firmware can stop at an"
+            warn "interactive prompt and never boot. Refusing to run a test that"
+            warn "can hang instead of failing."
+            return 3
+        fi
+        # A fresh private copy per run: the shared image must never be written to, and
+        # a stale variable store from a previous run must never influence this one.
+        vars_copy="${LOG_DIR}/OVMF_VARS.${firmware}.fd"
+        cp -f -- "$vars_src" "$vars_copy"
+        chmod u+w -- "$vars_copy"
         info "UEFI firmware: ${ovmf}"
-        qemu_args+=(-drive "if=pflash,format=raw,readonly=on,file=${ovmf}")
+        info "UEFI variables: ${vars_src} -> ${vars_copy} (writable copy)"
+        qemu_args+=(
+            -drive "if=pflash,unit=0,format=raw,readonly=on,file=${ovmf}"
+            -drive "if=pflash,unit=1,format=raw,file=${vars_copy}"
+        )
     fi
 
     : > "$serial_log"
@@ -186,13 +230,22 @@ boot_once() {
         info "  no /dev/kvm: full software emulation, expect roughly 10-20x native"
     fi
 
-    qemu-system-x86_64 "${qemu_args[@]}" &
+    # stdin closed, so neither QEMU nor anything it starts can ever block on a terminal
+    # that does not exist. In testing, this alone turned a firmware sitting at an
+    # interactive "press any key" prompt from an unbounded hang into an immediate exit.
+    #
+    # Deliberately NOT wrapped in `timeout`. That was tried and made things worse: this
+    # script kills the PID it holds, which would be the timeout wrapper, leaving the real
+    # QEMU orphaned and still running with the log pipe open. The bounds that matter are
+    # the poll loop below, the SIGTERM-then-SIGKILL escalation after it, and the
+    # step-level timeout-minutes in the workflow as the outer guardrail.
+    qemu-system-x86_64 "${qemu_args[@]}" </dev/null &
     local qemu_pid=$!
 
     # Progress tracking. The question after a timeout is always the same -- was it slow
     # or was it stuck -- and it is only answerable if we watched. Serial log growth is
     # the signal: a booting kernel keeps writing, a hung one stops.
-    local waited=0 found=1 last_size=0 size stalled_for=0
+    local waited=0 found=1 last_size=0 size stalled_for=0 qemu_self_exited=0
 
     # How long without output before we call it hung. Absolute thresholds are wrong at
     # both ends: 120s is far too long to wait out a 30s test, and far too twitchy for a
@@ -210,6 +263,7 @@ boot_once() {
         fi
         if ! kill -0 "$qemu_pid" 2>/dev/null; then
             warn "QEMU exited on its own after ${waited}s, before the marker appeared"
+            qemu_self_exited=1
             break
         fi
 
@@ -243,6 +297,9 @@ boot_once() {
         done
         if kill -0 "$qemu_pid" 2>/dev/null; then
             warn "QEMU ignored SIGTERM after ${grace}s; sending SIGKILL"
+            # Children first: a killed parent leaves orphans holding our log pipe open,
+            # which stalls anything reading this script's output.
+            pkill -KILL -P "$qemu_pid" 2>/dev/null || true
             kill -KILL "$qemu_pid" 2>/dev/null || true
         fi
         wait "$qemu_pid" 2>/dev/null || true
@@ -257,7 +314,13 @@ boot_once() {
     printf '%s%s: FAIL (%s) — %s never appeared within %ss%s%s'         "$NL" "$SCRIPT_NAME" "$firmware" "$MARKER" "$TIMEOUT" "$NL" "$NL" >&2
 
     # The verdict the maintainer actually needs, stated rather than left to inference.
-    if [[ "$last_size" -eq 0 ]]; then
+    if [[ "$qemu_self_exited" -eq 1 ]]; then
+        printf '  VERDICT: QEMU EXITED ON ITS OWN after %ss, before the marker.%s' "$waited" "$NL" >&2
+        printf '           The emulator quit rather than timing out, so this is not a slow%s' "$NL" >&2
+        printf '           boot. Likely causes: the firmware gave up and powered off, the%s' "$NL" >&2
+        printf '           guest shut down or panicked with -no-reboot set, or QEMU itself%s' "$NL" >&2
+        printf '           failed to start. Raising the timeout will change nothing.%s%s' "$NL" "$NL" >&2
+    elif [[ "$last_size" -eq 0 ]]; then
         printf '  VERDICT: nothing was ever written to the serial port.%s' "$NL" >&2
         printf '           Either the kernel command line has no console=ttyS0 (build with%s' "$NL" >&2
         printf '           --serial-console) or the boot never reached the kernel at all.%s%s' "$NL" "$NL" >&2
@@ -289,6 +352,11 @@ case "$MODE" in
 esac
 
 declare -a PASSED=() FAILED=() SKIPPED=()
+
+# --timeout is PER FIRMWARE. Saying so out loud, because "--mode both --timeout 2400"
+# quietly meant an eighty minute worst case in CI, which is how run #9 was allowed to
+# run for two hours before anyone stopped it.
+info "budget: ${#MODES[@]} boot(s) x ${TIMEOUT}s = $(( ${#MODES[@]} * TIMEOUT ))s worst case"
 
 for m in "${MODES[@]}"; do
     set +e

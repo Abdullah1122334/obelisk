@@ -715,7 +715,11 @@ if [[ "$AVAIL_MIB" -lt 12000 ]]; then
 fi
 
 info "running mkarchiso (this takes a while)"
-if ! mkarchiso -v -w "$MKARCHISO_WORK" -o "$OUT_DIR" -- "$PROFILE_DIR"; then
+# stdin closed. mkarchiso shells out to pacstrap and pacman, and a package transaction
+# that decides to ask a question must fail on EOF rather than wait forever on a terminal
+# that does not exist. CI run #9 hung for two hours; nothing in this path is allowed to
+# be capable of that again.
+if ! mkarchiso -v -w "$MKARCHISO_WORK" -o "$OUT_DIR" -- "$PROFILE_DIR" </dev/null; then
     die \
 "mkarchiso failed.
 
